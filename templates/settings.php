@@ -74,6 +74,11 @@ ob_start();
             <input type="hidden" name="csrf_token" value="<?= csrf_token() ?>">
             <input type="hidden" name="section" value="admin">
             
+            <div class="alert alert-info" style="margin-bottom: 1rem;">
+                <span class="material-icons" style="vertical-align: middle; margin-right: 0.5rem;">info</span>
+                Cet email est également utilisé pour recevoir les notifications de modération.
+            </div>
+            
             <div class="form-row">
                 <div class="form-group">
                     <label class="form-label" for="admin_email">Email administrateur</label>
@@ -114,6 +119,11 @@ ob_start();
         <form method="POST">
             <input type="hidden" name="csrf_token" value="<?= csrf_token() ?>">
             <input type="hidden" name="section" value="imap">
+            
+            <div class="alert alert-info" style="margin-bottom: 1rem;">
+                <span class="material-icons" style="vertical-align: middle; margin-right: 0.5rem;">verified</span>
+                La connexion IMAP sera testée lors de l'enregistrement.
+            </div>
             
             <div class="form-row">
                 <div class="form-group">
@@ -172,7 +182,7 @@ ob_start();
 </div>
 
 <!-- SMTP Settings -->
-<div class="card">
+<div class="card" id="smtp-section">
     <div class="card-header">
         <h2>Configuration SMTP (envoi)</h2>
     </div>
@@ -180,6 +190,11 @@ ob_start();
         <form method="POST">
             <input type="hidden" name="csrf_token" value="<?= csrf_token() ?>">
             <input type="hidden" name="section" value="smtp">
+            
+            <div class="alert alert-info" style="margin-bottom: 1rem;">
+                <span class="material-icons" style="vertical-align: middle; margin-right: 0.5rem;">mail</span>
+                Un email de test sera envoyé à l'adresse administrateur pour valider la configuration.
+            </div>
             
             <div class="form-row">
                 <div class="form-group">

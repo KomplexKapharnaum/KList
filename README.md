@@ -2,6 +2,63 @@
 
 A lightweight, self-hosted mailing list manager built with **pure PHP 8** and **SQLite**. Perfect for small to medium organizations who want full control over their mailing lists without complex dependencies.
 
+## 🔄 How It Works
+
+This tool runs on any standard PHP web hosting and relies on a **dedicated IMAP mailbox** that centralizes all mailing list traffic.
+
+### Architecture Overview
+
+```
+                    ┌─────────────────────────────────────────┐
+                    │         Your Mail Server                │
+                    │                                         │
+  geeks@domain.com ─┼──► alias ──┐                            │
+  admin@domain.com ─┼──► alias ──┼──► listes@domain.com ◄─────┼─── IMAP/SMTP
+  news@domain.com  ─┼──► alias ──┘        (main mailbox)      │
+                    └─────────────────────────────────────────┘
+                                              ▲
+                                              │
+                                              ▼
+                    ┌─────────────────────────────────────────┐
+                    │         PHP Web Hosting                 │
+                    │                                         │
+                    │   ┌─────────┐    ┌─────────────────┐    │
+                    │   │ cron.php│───►│ KList Manager   │    │
+                    │   └─────────┘    │ (this tool)     │    │
+                    │        ▲         └─────────────────┘    │
+                    └────────┼────────────────────────────────┘
+                             │
+                    Scheduled task (every 5-15 min)
+```
+
+### Key Concepts
+
+1. **Dedicated Mailbox**  
+   You need to have a dedicated email account (e.g., `listes@yourdomain.com`) with IMAP access. This mailbox:
+   - Receives all incoming list emails
+   - Sends all outgoing emails to subscribers
+   - Stores processed messages in IMAP folders
+   
+2. **Email Aliases (⚠️ Manual Setup Required)**  
+   Each mailing list needs a corresponding **email alias** pointing to the main mailbox.  
+   
+   | List Name | Alias to Create | Points To |
+   |-----------|-----------------|-----------|
+   | `geeks` | `geeks@yourdomain.com` | `listes@yourdomain.com` |
+   | `news` | `news@yourdomain.com` | `listes@yourdomain.com` |
+   | `team` | `team@yourdomain.com` | `listes@yourdomain.com` |
+   
+   > ⚠️ **Important:** Creating email aliases must be done manually in your mail server/hosting panel (cPanel, Plesk, etc.). This tool does not create aliases automatically!
+
+3. **Periodic Processing**  
+   The tool processes emails by calling `https://yourdomain.com/listes/cron.php?key=YOUR_CRON_KEY`. This can be:
+   - Automated via a cron job / scheduled task
+   - Triggered manually for testing
+   
+   You can find the actual URL with the CRON_KEY in Settings → Cron Configuration
+
+   Each run: fetches new emails → identifies target list → applies moderation → forwards to subscribers
+
 ## ✨ Features
 
 - **📋 Multiple mailing lists** - Create unlimited lists with individual settings
@@ -23,7 +80,7 @@ A lightweight, self-hosted mailing list manager built with **pure PHP 8** and **
   - `openssl` (for SMTP/IMAP TLS)
   - `mbstring` (recommended)
 - **Web server** with `.htaccess` support (Apache/LiteSpeed) or equivalent nginx config
-- **IMAP/SMTP access** to an email account for the lists
+- **IMAP/SMTP access** to a dedicated email account for the lists
 
 ## 🚀 Quick Installation
 
@@ -65,32 +122,19 @@ chmod 644 data/.htaccess
 chmod 644 tmp/.htaccess
 ```
 
-### 4. First Access
+### 4. First Access & Setup Wizard
 
 Navigate to your installation URL (e.g., `https://yourdomain.com/listes/`)
 
-**Default login credentials:**
-- **Email:** `admin@example.com`
-- **Password:** `changeme`
+On first access, the **setup wizard** will guide you through:
 
-⚠️ **Change these immediately in Settings → Admin Credentials**
+1. **Admin account** - Create your email/password (also used for moderation notifications)
+2. **IMAP configuration** - Connect to your dedicated mailbox
+3. **SMTP configuration** - Configure email sending (a test email will be sent)
 
-### 5. Configure Settings
+The database is only created after all settings are validated and connections tested.
 
-In the Settings panel, configure:
-
-| Setting | Description |
-|---------|-------------|
-| **IMAP Host** | Your mail server (e.g., `mail.yourdomain.com`) |
-| **IMAP Port** | Usually `993` for SSL |
-| **IMAP User** | The email account for lists (e.g., `listes@yourdomain.com`) |
-| **IMAP Password** | Password for the email account |
-| **SMTP Host** | Usually same as IMAP host |
-| **SMTP Port** | Usually `587` for TLS |
-| **SMTP User/Password** | Same as IMAP or different if needed |
-| **Domains** | Comma-separated list of domains (e.g., `yourdomain.com,yourdomain.net`) |
-
-### 6. Setup Cron Job
+### 5. Setup Cron Job
 
 The cron job processes incoming emails and forwards approved messages.
 

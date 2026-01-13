@@ -12,12 +12,9 @@ class Database {
 
     private function __construct() {
         $dbFile = DB_FILE;
-        $isNewDb = !file_exists($dbFile);
         
-        // Ensure data directory exists
-        $dataDir = dirname($dbFile);
-        if (!is_dir($dataDir)) {
-            mkdir($dataDir, 0755, true);
+        if (!file_exists($dbFile)) {
+            throw new Exception('Database not initialized. Run setup first.');
         }
         
         $this->pdo = new PDO('sqlite:' . $dbFile, null, null, [
@@ -29,29 +26,51 @@ class Database {
         // Enable foreign keys
         $this->pdo->exec('PRAGMA foreign_keys = ON');
         
-        // Create tables if new database
-        if ($isNewDb) {
-            $this->createTables();
-        }
-        
         // Run migrations for existing databases
         $this->runMigrations();
     }
 
-    public static function getInstance(): Database {
-        if (self::$instance === null) {
-            self::$instance = new Database();
+    /**
+     * Check if the application is installed (database exists)
+     */
+    public static function isInstalled(): bool {
+        return file_exists(DB_FILE);
+    }
+
+    /**
+     * Initialize the database with user-provided settings
+     */
+    public static function initialize(array $settings): void {
+        $dbFile = DB_FILE;
+        
+        // Ensure data directory exists
+        $dataDir = dirname($dbFile);
+        if (!is_dir($dataDir)) {
+            mkdir($dataDir, 0755, true);
         }
-        return self::$instance;
+        
+        $pdo = new PDO('sqlite:' . $dbFile, null, null, [
+            PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+            PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+            PDO::ATTR_EMULATE_PREPARES => false,
+        ]);
+        
+        // Enable foreign keys
+        $pdo->exec('PRAGMA foreign_keys = ON');
+        
+        // Create tables
+        self::createTablesOn($pdo);
+        
+        // Insert user-provided settings
+        $stmt = $pdo->prepare("INSERT INTO settings (key, value) VALUES (?, ?)");
+        foreach ($settings as $key => $value) {
+            $stmt->execute([$key, $value]);
+        }
     }
 
-    public function getPdo(): PDO {
-        return $this->pdo;
-    }
-
-    private function createTables(): void {
+    private static function createTablesOn(PDO $pdo): void {
         // Settings table
-        $this->pdo->exec("
+        $pdo->exec("
             CREATE TABLE IF NOT EXISTS settings (
                 key TEXT PRIMARY KEY,
                 value TEXT,
@@ -60,7 +79,7 @@ class Database {
         ");
 
         // Listes table
-        $this->pdo->exec("
+        $pdo->exec("
             CREATE TABLE IF NOT EXISTS listes (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 nom TEXT NOT NULL UNIQUE,
@@ -74,8 +93,8 @@ class Database {
             )
         ");
 
-        // Subscribers table (normalized - no more semicolon-separated strings!)
-        $this->pdo->exec("
+        // Subscribers table
+        $pdo->exec("
             CREATE TABLE IF NOT EXISTS subscribers (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 liste_id INTEGER NOT NULL,
@@ -88,7 +107,7 @@ class Database {
         ");
 
         // Blocklist table
-        $this->pdo->exec("
+        $pdo->exec("
             CREATE TABLE IF NOT EXISTS blocklist (
                 email TEXT PRIMARY KEY,
                 code INTEGER NOT NULL,
@@ -96,12 +115,20 @@ class Database {
             )
         ");
 
-        // Create index for faster subscriber lookups
-        $this->pdo->exec("CREATE INDEX IF NOT EXISTS idx_subscribers_liste ON subscribers(liste_id)");
-        $this->pdo->exec("CREATE INDEX IF NOT EXISTS idx_subscribers_email ON subscribers(email)");
+        // Create indexes
+        $pdo->exec("CREATE INDEX IF NOT EXISTS idx_subscribers_liste ON subscribers(liste_id)");
+        $pdo->exec("CREATE INDEX IF NOT EXISTS idx_subscribers_email ON subscribers(email)");
+    }
 
-        // Insert default settings
-        $this->insertDefaultSettings();
+    public static function getInstance(): Database {
+        if (self::$instance === null) {
+            self::$instance = new Database();
+        }
+        return self::$instance;
+    }
+
+    public function getPdo(): PDO {
+        return $this->pdo;
     }
 
     private function runMigrations(): void {
@@ -117,29 +144,6 @@ class Database {
         
         if (!$hasLastUsed) {
             $this->pdo->exec("ALTER TABLE listes ADD COLUMN last_used DATETIME");
-        }
-    }
-
-    private function insertDefaultSettings(): void {
-        $defaults = [
-            'site_title' => 'Mailing List Manager',
-            'admin_email' => 'admin@example.com',
-            'admin_password' => password_hash('changeme', PASSWORD_DEFAULT),
-            'imap_host' => 'mail.example.com',
-            'imap_port' => '993',
-            'imap_user' => 'listes@example.com',
-            'imap_password' => '',
-            'smtp_host' => 'mail.example.com',
-            'smtp_port' => '587',
-            'smtp_user' => 'listes@example.com',
-            'smtp_password' => '',
-            'domains' => 'example.com',
-            'cron_key' => bin2hex(random_bytes(16)),
-        ];
-
-        $stmt = $this->pdo->prepare("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)");
-        foreach ($defaults as $key => $value) {
-            $stmt->execute([$key, $value]);
         }
     }
 

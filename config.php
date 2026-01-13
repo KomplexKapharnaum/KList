@@ -51,11 +51,19 @@ if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
-// Initialize database connection
-$db = Database::getInstance();
+// Check if application is installed
+function is_installed(): bool {
+    return Database::isInstalled();
+}
 
-// Load settings from database
-$settings = $db->getSettings();
+// Initialize database connection (only if installed)
+$db = null;
+$settings = [];
+
+if (is_installed()) {
+    $db = Database::getInstance();
+    $settings = $db->getSettings();
+}
 
 // Helper function to get setting value
 function setting(string $key, $default = null) {

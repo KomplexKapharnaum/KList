@@ -33,6 +33,12 @@ register_shutdown_function(function() {
 
 require_once __DIR__ . '/config.php';
 
+// Check if application is installed
+if (!is_installed()) {
+    http_response_code(503);
+    die('Service unavailable: Application not installed');
+}
+
 // Get parameters
 $key = $_GET['key'] ?? '';
 $action = $_GET['action'] ?? '';
