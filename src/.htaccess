@@ -1,0 +1,2 @@
+# Deny access to src directory
+Deny from all

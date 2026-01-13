@@ -1,0 +1,2 @@
+# Deny access to tmp directory
+Deny from all

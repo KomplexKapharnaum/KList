@@ -1,0 +1,58 @@
+# KXKM Mailing List Manager - Security Configuration
+# ==================================================
+
+# Allow PHP files in this directory
+<FilesMatch '\.php$'>
+    Order allow,deny
+    Allow from all
+</FilesMatch>
+
+# Deny access to sensitive files
+<FilesMatch '(\.db|\.sqlite|\.env|\.git|\.log)$'>
+    Order allow,deny
+    Deny from all
+</FilesMatch>
+
+# Deny access to sensitive directories
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    
+    # Deny access to data directory (database)
+    RewriteRule ^data/ - [F,L]
+    
+    # Deny access to src directory (PHP classes)
+    RewriteRule ^src/ - [F,L]
+    
+    # Deny access to templates directory
+    RewriteRule ^templates/ - [F,L]
+    
+    # Deny access to tmp directory (attachments)
+    RewriteRule ^tmp/ - [F,L]
+    
+    # Deny access to lib directory (libraries)
+    RewriteRule ^lib/ - [F,L]
+</IfModule>
+
+# Security headers
+<IfModule mod_headers.c>
+    # Prevent MIME type sniffing
+    Header set X-Content-Type-Options "nosniff"
+    
+    # Prevent clickjacking
+    Header set X-Frame-Options "SAMEORIGIN"
+    
+    # XSS protection (legacy browsers)
+    Header set X-XSS-Protection "1; mode=block"
+    
+    # Referrer policy
+    Header set Referrer-Policy "strict-origin-when-cross-origin"
+    
+    # Permissions policy (disable unnecessary features)
+    Header set Permissions-Policy "geolocation=(), microphone=(), camera=()"
+</IfModule>
+
+# Prevent directory listing
+Options -Indexes
+
+# Disable server signature
+ServerSignature Off

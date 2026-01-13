@@ -1,0 +1,2 @@
+# Deny access to data directory
+Deny from all

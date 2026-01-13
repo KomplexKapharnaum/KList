@@ -1,0 +1,36 @@
+# ===================================
+# KXKM Mailing List Manager - .gitignore
+# ===================================
+
+# Database (contains all data and credentials)
+data/*.db
+
+# Temporary attachment files
+tmp/*
+!tmp/.htaccess
+!tmp/.gitkeep
+
+# Environment / IDE
+.env
+.env.local
+*.log
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Dependencies (if using composer in future)
+vendor/
+composer.lock
+
+# PHPMailer and Fetch libraries (included separately)
+# Uncomment if you want to exclude them:
+# lib/PHPMailer/
+# lib/Fetch/
+
+# Build/deployment files
+.deploy/
+deploy.php
