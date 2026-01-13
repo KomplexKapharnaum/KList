@@ -173,11 +173,18 @@ The cron job processes incoming emails and forwards approved messages.
 └─────────────┘     └─────────────┘     └─────────────┘
        │                                       │
        │ (auto-approved)                       │
-       ▼                                       ▼
-┌─────────────┐                        ┌─────────────┐
-│   DONE      │ ◀────────────────────  │  Forward    │
-│ (archived)  │                        │  to subs    │
-└─────────────┘                        └─────────────┘
+       └───────────────────┐                   │
+                           ▼                   ▼
+                    ┌─────────────────────────────┐
+                    │      Forward to             │
+                    │      subscribers            │
+                    └─────────────────────────────┘
+                                  │
+                                  ▼
+                          ┌─────────────┐
+                          │   DONE      │
+                          │ (archived)  │
+                          └─────────────┘
 ```
 
 **Special IMAP folders created automatically:**
