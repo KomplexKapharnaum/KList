@@ -30,7 +30,7 @@ A lightweight, self-hosted mailing list manager built with **pure PHP 8** and **
 ### 1. Download
 
 ```bash
-git clone https://github.com/your-org/mailing-list-manager.git listes
+git clone https://github.com/KomplexKapharnaum/KList.git listes
 cd listes
 ```
 
@@ -232,44 +232,24 @@ listes/
 
 ## 🔧 Troubleshooting
 
-### "IMAP connection failed"
-
-1. Verify IMAP credentials in Settings
-2. Check if IMAP is enabled on your mail server
-3. Some hosts require `mail.domain.com` vs `domain.com`
-4. Check firewall allows port 993
-
-### "Cron not running"
-
-1. Verify cron key matches Settings → Cron Configuration
-2. Test URL directly in browser (should show processing output)
-3. Check server cron logs
-4. Ensure `allow_url_fopen` is enabled
-
-### "Emails not sending"
-
-1. Check SMTP settings
-2. Verify sender email is authorized (SPF/DKIM)
-3. Check cron output for errors
-4. Look in ERRORS folder on IMAP
-
-### "Memory exhausted"
-
-The cron processor is optimized for low memory (tested on 640MB). If issues persist:
-1. Reduce `$maxMessagesPerRun` in `MailProcessor.php`
-2. Large attachments (>10MB) are automatically skipped
-3. Increase PHP memory limit if possible
+| Issue | Solutions |
+|-------|-----------|
+| **IMAP connection failed** | Verify credentials in Settings • Check IMAP is enabled on mail server • Try `mail.domain.com` vs `domain.com` • Ensure firewall allows port 993 |
+| **Cron not running** | Verify cron key in Settings → Cron Configuration • Test URL in browser • Check server cron logs |
+| **Emails not sending** | Check SMTP settings • Verify SPF/DKIM for sender email • Check ERRORS folder on IMAP |
+| **Memory exhausted** | Reduce `$maxMessagesPerRun` in `MailProcessor.php` • Large attachments (>10MB) auto-skipped • Increase PHP memory limit |
 
 ## 📜 License
 
-MIT License - See [LICENSE](LICENSE) file
+GPLv3 License - See [LICENSE](LICENSE) file
+
+## 👤 Author
+
+**Thomas BOHL** ([@maigre](https://github.com/maigre))  
+[KomplexKapharnaüm](https://kxkm.net) – Arts numériques & Spectacle vivant
 
 ## 🙏 Credits
 
-- [PHPMailer](https://github.com/PHPMailer/PHPMailer) - Email sending library
-- [Fetch](https://github.com/tedious/Fetch) - IMAP library
-- [Material Icons](https://fonts.google.com/icons) - UI icons
-
----
-
-Made with ❤️ by KXKM
+- [PHPMailer](https://github.com/PHPMailer/PHPMailer) – Email sending library
+- [Fetch](https://github.com/tedious/Fetch) – IMAP library
+- [Material Icons](https://fonts.google.com/icons) – UI icons
