@@ -10,8 +10,7 @@ declare(strict_types=1);
 
 // Require PHPMailer and Fetch libraries
 $libPath = ROOT_PATH . '/lib';
-require_once $libPath . '/PHPMailer/class.phpmailer.php';
-require_once $libPath . '/PHPMailer/class.smtp.php';
+require_once $libPath . '/PHPMailer/load.php';
 require_once $libPath . '/Fetch/Message.php';
 require_once $libPath . '/Fetch/Server.php';
 require_once $libPath . '/Fetch/MIME.php';

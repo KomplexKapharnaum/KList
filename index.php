@@ -215,8 +215,7 @@ function testImapConnection(string $host, int $port, string $user, string $passw
 function testSmtpConnection(string $host, int $port, string $user, string $password, string $adminEmail): ?string {
     try {
         // Load PHPMailer
-        require_once ROOT_PATH . '/lib/PHPMailer/class.phpmailer.php';
-        require_once ROOT_PATH . '/lib/PHPMailer/class.smtp.php';
+        require_once ROOT_PATH . '/lib/PHPMailer/load.php';
         
         $mail = new \PHPMailer();
         $mail->isSMTP();
