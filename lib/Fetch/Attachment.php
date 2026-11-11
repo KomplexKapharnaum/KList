@@ -64,6 +64,20 @@ class Attachment
     protected $size;
 
     /**
+     * This is the mimetype of the attachment ("type/subtype").
+     *
+     * @var string
+     */
+    protected $mimeType;
+
+    /**
+     * This is the transfer encoding of the attachment, as a numeric code (0 = 7bit … 5 = other).
+     *
+     * @var int
+     */
+    protected $encoding;
+
+    /**
      * This stores the data of the attachment so it doesn't have to be retrieved from the server multiple times. It is
      * only populated if the getData() function is called and should not be directly used.
      *

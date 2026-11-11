@@ -276,7 +276,7 @@ class MailProcessor {
             $this->smtpConnection->Username = $this->username;
             $this->smtpConnection->Password = $this->db->getSetting('smtp_password', '');
             $this->smtpConnection->SMTPKeepAlive = true; // Keep connection alive
-            $this->smtpConnection->isHTML = true;
+            $this->smtpConnection->isHTML(true);
             $this->smtpConnection->Sender = $this->username;
             
             $elapsed = round(microtime(true) - $startTime, 3);

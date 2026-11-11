@@ -21,7 +21,28 @@ if [ -n "$calls" ]; then
 fi
 echo "verify: no imap_*() call"
 
+# PHP 8.5 deprecations named by the port (dev37 runs 8.4, so 8.5-only ones are grepped):
+# non-canonical casts, PHPMailer::$isHTML set as a property, index.php catching only Exception
+# around IMAP (a missing extension or a TypeError must give a message, not a 500).
+dep=$(git ls-files '*.php' | grep -v '^lib/PHPMailer/' \
+    | xargs grep -nE '\((integer|boolean|double|binary)\)|->isHTML[[:space:]]*=[^=]' \
+    | grep -vE '^[^:]+:[0-9]+:[[:space:]]*(\*|//|/\*)' || true)
+dep+=$(grep -nE 'catch[[:space:]]*\([[:space:]]*\\?Exception[[:space:]]' index.php || true)
+if [ -n "$dep" ]; then
+    echo "verify: PHP 8.5 deprecations left:" >&2
+    echo "$dep" >&2
+    exit 1
+fi
+echo "verify: no PHP 8.5 deprecation left"
+
+# Tests run with every notice on: a deprecation (dynamic property…) or warning is a failure.
 for t in tests/*_test.php; do
-    php "$t"
+    out=$(php -d error_reporting=-1 -d display_errors=stderr -d log_errors=0 "$t" 2>&1) \
+        || { echo "$out" >&2; exit 1; }
+    echo "$out"
+    if grep -qE '^(PHP )?(Deprecated|Warning|Notice):' <<<"$out"; then
+        echo "verify: $t raised a deprecation/warning" >&2
+        exit 1
+    fi
 done
 echo "verify: green"

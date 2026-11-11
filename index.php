@@ -176,7 +176,7 @@ function handleSetup(): void {
                 // Redirect to login
                 header('Location: ' . url('?page=login'));
                 exit;
-            } catch (Exception $e) {
+            } catch (\Throwable $e) {
                 $errors[] = 'Erreur lors de la création de la base de données : ' . $e->getMessage();
             }
         }
@@ -204,7 +204,7 @@ function testImapConnection(string $host, int $port, string $user, string $passw
         $server->hasMailBox('INBOX');
         
         return null; // Success
-    } catch (Exception $e) {
+    } catch (\Throwable $e) {
         return $e->getMessage();
     }
 }
@@ -238,7 +238,7 @@ function testSmtpConnection(string $host, int $port, string $user, string $passw
         }
         
         return null; // Success
-    } catch (Exception $e) {
+    } catch (\Throwable $e) {
         return $e->getMessage();
     }
 }
@@ -632,7 +632,7 @@ function handleModeration(?string $action): void {
         if ($processor->connect()) {
             $messages = $processor->getPendingMessages();
         }
-    } catch (Exception $e) {
+    } catch (\Throwable $e) {
         $error = 'Erreur de connexion IMAP: ' . $e->getMessage();
     }
     
@@ -658,7 +658,7 @@ function handleErrors(): void {
             $errors = $processor->getErrorMessages();
             $discarded = $processor->getDiscardedMessages();
         }
-    } catch (Exception $e) {
+    } catch (\Throwable $e) {
         $errorMsg = 'Erreur de connexion IMAP: ' . $e->getMessage();
     }
     

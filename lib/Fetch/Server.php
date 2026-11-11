@@ -511,7 +511,7 @@ class Server
      */
     public function hasMailBox($mailbox)
     {
-        return (boolean) $this->getMailBoxDetails($mailbox);
+        return (bool) $this->getMailBoxDetails($mailbox);
     }
 
     /**
