@@ -36,11 +36,11 @@ class Attachment
     protected $messageId;
 
     /**
-     * This is the ImapResource.
+     * The message this attachment belongs to; its bytes come from Message::fetchSection().
      *
-     * @var resource
+     * @var Message
      */
-    protected $imapStream;
+    protected $message;
 
     /**
      * This is the id pointing to the section of the message body that contains the attachment.
@@ -84,7 +84,7 @@ class Attachment
     public function __construct(Message $message, $structure, $partIdentifier = null)
     {
         $this->messageId  = $message->getUid();
-        $this->imapStream = $message->getImapBox()->getImapStream();
+        $this->message    = $message;
         $this->structure  = $structure;
 
         if (isset($partIdentifier))
@@ -117,9 +117,7 @@ class Attachment
     public function getData()
     {
         if (!isset($this->data)) {
-            $messageBody = isset($this->partId) ?
-                imap_fetchbody($this->imapStream, $this->messageId, $this->partId, FT_UID)
-                : imap_body($this->imapStream, $this->messageId, FT_UID);
+            $messageBody = $this->message->fetchSection(isset($this->partId) ? $this->partId : null);
 
             $messageBody = Message::decode($messageBody, $this->encoding);
             $this->data  = $messageBody;
@@ -220,8 +218,7 @@ class Attachment
 
         // Fix an issue causing server to throw an error
         // See: https://github.com/tedious/Fetch/issues/74 for more details
-        $fetch  = imap_fetchbody($this->imapStream, $this->messageId, $this->partId ?: 1, FT_UID);
-        $result = imap_savebody($this->imapStream, $filePointer, $this->messageId, $this->partId ?: 1, FT_UID);
+        $result = fwrite($filePointer, $this->message->fetchSection($this->partId ?: 1)) !== false;
 
         if ($streamFilter) {
             stream_filter_remove($streamFilter);

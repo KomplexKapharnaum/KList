@@ -11,6 +11,8 @@
 
 namespace Fetch;
 
+require_once __DIR__ . '/MimeParser.php';
+
 /**
  * This library is a wrapper around the Imap library functions included in php.
  *
@@ -34,7 +36,7 @@ final class MIME
 
         $result = '';
 
-        foreach (imap_mime_header_decode($text) as $word) {
+        foreach (MimeParser::mimeHeaderDecode($text) as $word) {
             $ch = 'default' === $word->charset ? 'ascii' : $word->charset;
 
             $result .= iconv($ch, $targetCharset, $word->text);

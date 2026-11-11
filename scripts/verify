@@ -9,6 +9,18 @@ git ls-files '*.php' | while read -r f; do
 done
 echo "verify: syntax ok"
 
+# PHP 8.5 has no imap extension: no imap_*() call may be left. Comment lines are skipped;
+# lib/PHPMailer is skipped, its one call sits behind function_exists().
+calls=$(git ls-files '*.php' | grep -v '^lib/PHPMailer/' \
+    | xargs grep -nE '\bimap_[a-z0-9_]+[[:space:]]*\(' \
+    | grep -vE '^[^:]+:[0-9]+:[[:space:]]*(\*|//|/\*)' || true)
+if [ -n "$calls" ]; then
+    echo "verify: imap_*() calls left:" >&2
+    echo "$calls" >&2
+    exit 1
+fi
+echo "verify: no imap_*() call"
+
 for t in tests/*_test.php; do
     php "$t"
 done

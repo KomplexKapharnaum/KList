@@ -11,6 +11,8 @@
 
 namespace Fetch;
 
+require_once __DIR__ . '/ImapClient.php';
+
 /**
  * This library is a wrapper around the Imap library functions included in php. This class in particular manages a
  * connection to the server (imap, pop, etc) and allows for the easy retrieval of stored messages.
@@ -115,6 +117,15 @@ class Server
      * @var string
      */
     protected $service = 'imap';
+
+    /** @var array what the last SELECT reported: exists, recent, uidvalidity, uidnext, flags, readonly */
+    protected $selected = array();
+
+    /** @var int seconds, for the connect and every read */
+    protected $timeout = 30;
+
+    /** @var ImapClient|null a connected client to use instead of opening one (tests) */
+    protected $pendingClient;
 
     /**
      * This constructor takes the location and service thats trying to be connected to as its arguments.
@@ -306,17 +317,43 @@ class Server
      */
     protected function setImapStream()
     {
-        if (!empty($this->imapStream)) {
-            if (!imap_reopen($this->imapStream, $this->getServerString(), $this->options, 1))
-                throw new \RuntimeException(imap_last_error());
-        } else {
-            $imapStream = @imap_open($this->getServerString(), $this->username, $this->password, $this->options, 1, $this->params);
-
-            if ($imapStream === false)
-                throw new \RuntimeException(imap_last_error());
-
-            $this->imapStream = $imapStream;
+        // ImapException extends \RuntimeException and carries the server's NO/BAD text, as
+        // imap_last_error() did.
+        if (empty($this->imapStream)) {
+            if (isset($this->pendingClient)) {
+                $client = $this->pendingClient;
+                $this->pendingClient = null;
+            } else {
+                $sslOptions = in_array('novalidate-cert', $this->flags)
+                    ? array('verify_peer' => false, 'verify_peer_name' => false) : array();
+                $client = ImapClient::connect($this->serverPath, $this->port, $this->timeout, $sslOptions);
+            }
+            $client->login($this->username, $this->password);
+            $this->imapStream = $client;
         }
+        $this->selected = $this->imapStream->select($this->mailbox === '' ? 'INBOX' : $this->mailbox);
+    }
+
+    /**
+     * Hands the server an already connected client (it still logs in and selects). Tests use it
+     * to run Fetch against a scripted IMAP exchange.
+     *
+     * @param ImapClient $client
+     */
+    public function useClient(ImapClient $client)
+    {
+        $this->pendingClient = $client;
+    }
+
+    /**
+     * Sends LOGOUT if a session is open.
+     */
+    public function close()
+    {
+        if ($this->imapStream instanceof ImapClient) {
+            $this->imapStream->logout();
+        }
+        $this->imapStream = null;
     }
 
     /**
@@ -329,7 +366,8 @@ class Server
     {
         $cnt = 0;
         if ($mailbox==='') {
-            $cnt = imap_num_msg($this->getImapStream());
+            $this->getImapStream();
+            $cnt = isset($this->selected['exists']) ? $this->selected['exists'] : 0;
         } elseif ($this->hasMailbox($mailbox) && $mailbox !== '') {
             $oldMailbox = $this->getMailBox();
             $this->setMailbox($mailbox);
@@ -353,7 +391,7 @@ class Server
      */
     public function search($criteria = 'ALL', $limit = null)
     {
-        if ($results = imap_search($this->getImapStream(), $criteria, SE_UID)) {
+        if ($results = $this->getImapStream()->uidSearch($criteria)) {
             if (isset($limit) && count($results) > $limit)
                 $results = array_slice($results, 0, $limit);
 
@@ -395,10 +433,8 @@ class Server
         if ($numMessages < 1)
             return array();
 
-        $stream   = $this->getImapStream();
         $messages = array();
-        for ($i = 1; $i <= $numMessages; $i++) {
-            $uid        = imap_uid($stream, $i);
+        foreach ($this->getMessageUids($numMessages) as $uid) {
             $messages[] = new Message($uid, $this);
         }
 
@@ -417,7 +453,21 @@ class Server
      */
     public function getOrderedMessages($orderBy, $reverse, $limit)
     {
-        $msgIds = imap_sort($this->getImapStream(), $orderBy, $reverse ? 1 : 0, SE_UID);
+        // ext-imap's SORTDATE (0), SORTARRIVAL (1) and SORTSIZE (6), sorted here: no SORT extension
+        // is assumed on the server. Date = the server's INTERNALDATE.
+        $keys = array(0 => 'INTERNALDATE', 1 => 'UID', 6 => 'RFC822.SIZE');
+        if (!isset($keys[$orderBy]))
+            throw new \InvalidArgumentException('Unsupported sort criterion: ' . $orderBy);
+
+        $msgIds = array();
+        if ($this->numMessages() > 0) {
+            foreach ($this->getImapStream()->fetch('1:*', '(UID INTERNALDATE RFC822.SIZE)') as $item) {
+                $value = $item[$keys[$orderBy]];
+                $msgIds[(int) $item['UID']] = $orderBy === 0 ? strtotime($value) : (int) $value;
+            }
+        }
+        $reverse ? arsort($msgIds) : asort($msgIds);
+        $msgIds = array_keys($msgIds);
 
         return array_map(array($this, 'getMessageByUid'), array_slice($msgIds, 0, $limit));
     }
@@ -446,7 +496,10 @@ class Server
      */
     public function expunge()
     {
-        return imap_expunge($this->getImapStream());
+        $this->getImapStream()->expunge();
+        $this->setImapStream();   // re-SELECT: the message count changed
+
+        return true;
     }
 
     /**
@@ -470,11 +523,16 @@ class Server
     */
     public function getMailBoxDetails($mailbox)
     {
-        return imap_getmailboxes(
-            $this->getImapStream(),
-            $this->getServerString(),
-            $this->getServerSpecification() . $mailbox
-        );
+        $details = array();
+        foreach ($this->getImapStream()->listMailboxes('', $mailbox === '' ? 'INBOX' : $mailbox) as $box) {
+            $details[] = (object) array(
+                'name' => $this->getServerSpecification() . $box['name'],
+                'attributes' => $box['attributes'],   // flag names (ext-imap gave a bitmask)
+                'delimiter' => $box['delimiter'],
+            );
+        }
+
+        return $details;
     }
 
     /**
@@ -486,7 +544,13 @@ class Server
      */
     public function createMailBox($mailbox)
     {
-        return imap_createmailbox($this->getImapStream(), $this->getServerSpecification() . $mailbox);
+        try {
+            $this->getImapStream()->create($mailbox);
+        } catch (ImapException $e) {
+            return false;
+        }
+
+        return true;
     }
 
     /**
@@ -498,7 +562,12 @@ class Server
      */
     public function listMailBoxes($pattern = '*')
     {
-        return imap_list($this->getImapStream(), $this->getServerSpecification(), $pattern);
+        $names = array();
+        foreach ($this->getImapStream()->listMailboxes('', $pattern) as $box) {
+            $names[] = $this->getServerSpecification() . $box['name'];
+        }
+
+        return $names;
     }
 
     /**
@@ -510,7 +579,13 @@ class Server
      */
      public function deleteMailBox($mailbox)
      {
-         return imap_deletemailbox($this->getImapStream(), $this->getServerSpecification() . $mailbox);
+         try {
+             $this->getImapStream()->delete($mailbox);
+         } catch (ImapException $e) {
+             return false;
+         }
+
+         return true;
      }
 
     /**
@@ -530,10 +605,11 @@ class Server
         if ($numMessages < 1)
             return array();
 
-        $stream = $this->getImapStream();
+        $items = $this->getImapStream()->fetch('1:' . (int) $numMessages, '(UID)');
+        ksort($items);
         $uids = array();
-        for ($i = 1; $i <= $numMessages; $i++) {
-            $uids[] = imap_uid($stream, $i);
+        foreach ($items as $item) {
+            $uids[] = (int) $item['UID'];
         }
 
         return $uids;
