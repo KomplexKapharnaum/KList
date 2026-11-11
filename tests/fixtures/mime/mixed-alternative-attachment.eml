@@ -1,0 +1,32 @@
+From: =?ISO-8859-1?Q?Ren=E9_Fran=E7ois?= <rene@example.fr>
+To: liste@listes.kxkm.net
+Subject: Programme
+Date: Wed, 11 Nov 2026 18:00:00 +0100
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="outer-b"
+
+This is a multi-part message in MIME format.
+--outer-b
+Content-Type: multipart/alternative; boundary=inner-b
+
+--inner-b
+Content-Type: text/plain; charset="iso-8859-1"
+Content-Transfer-Encoding: quoted-printable
+
+Caf=E9 cr=E8me =
+ce soir.
+--inner-b
+Content-Type: text/html; charset=UTF-8
+Content-Transfer-Encoding: base64
+
+PHA+Q2Fmw6kgY3LDqG1lPC9wPg==
+--inner-b--
+--outer-b
+Content-Type: application/pdf; name="programme 2026.pdf"
+Content-Disposition: attachment; filename="programme 2026.pdf"
+Content-Transfer-Encoding: base64
+Content-ID: <pdf1@example.fr>
+
+JVBERi0xLjQKJcOkw7zDtsOfCg==
+--outer-b--
+epilogue

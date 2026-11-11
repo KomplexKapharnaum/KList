@@ -1,0 +1,26 @@
+From: bob@example.net
+To: liste@listes.kxkm.net
+Subject: Fwd: hello
+Content-Type: multipart/mixed; boundary=fw
+
+--fw
+Content-Type: text/plain
+
+See below.
+--fw
+Content-Type: message/rfc822
+
+From: carol@example.com
+Subject: hello
+Content-Type: multipart/alternative; boundary=in
+
+--in
+Content-Type: text/plain; charset=utf-8
+
+inner plain
+--in
+Content-Type: text/html; charset=utf-8
+
+<p>inner html</p>
+--in--
+--fw--

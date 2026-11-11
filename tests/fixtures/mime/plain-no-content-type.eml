@@ -1,0 +1,10 @@
+Return-Path: <alice@example.org>
+From: "Dupont, Alice" <alice@example.org>
+To: undisclosed-recipients:;
+Cc: bob@example.net (Bob B), Carol <carol.c@example.com>
+Subject: =?UTF-8?Q?R=C3=A9union?= =?UTF-8?B?IGRlIGx1bmRp?= ok
+Date: Tue, 10 Nov 2026 09:15:00 +0100
+Message-ID: <abc123@example.org>
+
+Hello list,
+second line.

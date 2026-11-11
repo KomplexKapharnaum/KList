@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# KList's own gate: syntax pass on every tracked PHP file, then the tests under tests/.
+# Run from the repo root: bash scripts/verify   (exit 0 = green)
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+git ls-files '*.php' | while read -r f; do
+    php -l "$f" >/dev/null || { echo "verify: syntax error in $f" >&2; exit 1; }
+done
+echo "verify: syntax ok"
+
+for t in tests/*_test.php; do
+    php "$t"
+done
+echo "verify: green"
