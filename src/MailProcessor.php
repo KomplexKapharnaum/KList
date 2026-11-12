@@ -1225,13 +1225,47 @@ class MailProcessor {
      * Get discarded messages (for errors UI)
      */
     public function getDiscardedMessages(): array {
-        return $this->getMessagesFromFolder('DISCARDED', 20);
+        return $this->getMessagesFromFolder('DISCARDED', 20, true);
+    }
+
+    /** What the Refusés page says for each reason refusalReason() returns. */
+    public const REFUSAL_LABELS = [
+        'blocked'        => 'expéditeur bloqué',
+        'not-subscriber' => "l'expéditeur n'est abonné à aucune liste de discussion",
+        'inactive'       => 'liste inactive',
+        'moderator'      => 'refusé par le modérateur',
+        'unknown'        => 'raison inconnue (les listes ont changé depuis ?)',
+    ];
+
+    /**
+     * Why dispatch() would have put this message in DISCARDED, read again from TODAY's
+     * blocklist, lists and subscribers (nothing stores the reason when the message moves).
+     * Same order as dispatch(): blocked sender first, then per list named — a sender on no
+     * discussion list, an inactive list; a moderated list sends to PENDING, so a message of
+     * one that sits in DISCARDED was refused by the moderator.
+     */
+    public static function refusalReason(string $from, array $matchedListes, array $blocklist, array $allAbonnes): string {
+        $from = strtolower($from);
+        if (isset($blocklist[$from])) return 'blocked';
+        if (empty($matchedListes)) return 'unknown';
+        if (!in_array($from, $allAbonnes, true)) return 'not-subscriber';
+        $reason = null;
+        foreach ($matchedListes as $liste) {
+            if (!$liste['active']) {
+                $reason = $reason ?? 'inactive';
+            } elseif ($liste['moderation']) {
+                return 'moderator';
+            } else {
+                $reason = 'unknown';    // dispatch() would approve it today
+            }
+        }
+        return $reason ?? 'unknown';
     }
 
     /**
      * Helper to get messages from a folder
      */
-    private function getMessagesFromFolder(string $folder, int $limit = 20): array {
+    private function getMessagesFromFolder(string $folder, int $limit = 20, bool $withReason = false): array {
         $messages = [];
         
         try {
@@ -1244,7 +1278,7 @@ class MailProcessor {
                     if ($msg === false) continue;
                     
                     $from = $msg->getAddresses('from');
-                    $messages[] = [
+                    $item = [
                         'uid' => $uid,
                         'from' => $from['address'] ?? 'unknown',
                         'from_name' => $from['name'] ?? '',
@@ -1252,6 +1286,12 @@ class MailProcessor {
                         'date' => $msg->getDate(),
                         'body_preview' => substr(strip_tags($msg->getMessageBody()), 0, 200)
                     ];
+                    if ($withReason) {
+                        $matched = $this->matchListes($msg);
+                        $item['lists'] = array_values(array_unique(array_column($matched, 'nom')));
+                        $item['reason'] = self::refusalReason($from['address'] ?? '', $matched, $this->blocklist, $this->allAbonnes);
+                    }
+                    $messages[] = $item;
                     
                     unset($msg);
                     gc_collect_cycles();

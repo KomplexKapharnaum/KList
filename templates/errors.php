@@ -92,7 +92,13 @@ ob_start();
                     </div>
                     <div class="text-muted" style="font-size: 0.8rem;">
                         <span class="material-icons" style="font-size: 0.9rem; vertical-align: middle;">schedule</span>
-                        <?= date('d/m/Y H:i', $msg['date']) ?>
+                        <?= $msg['date'] ? date('d/m/Y H:i', $msg['date']) : '—' ?>
+                    </div>
+                    <div style="font-size: 0.85rem; margin-top: 0.25rem;">
+                        <span class="material-icons" style="font-size: 0.9rem; vertical-align: middle;">mail</span>
+                        <?= !empty($msg['lists']) ? e(implode(', ', $msg['lists'])) : '<span class="text-muted">aucune liste</span>' ?>
+                        —
+                        <strong><?= e(MailProcessor::REFUSAL_LABELS[$msg['reason'] ?? 'unknown'] ?? MailProcessor::REFUSAL_LABELS['unknown']) ?></strong>
                     </div>
                     <?php if (!empty($msg['body_preview'])): ?>
                     <div style="margin-top: 0.5rem; font-size: 0.85rem; color: var(--text-muted); 
@@ -114,7 +120,7 @@ ob_start();
         <strong>Légende:</strong>
         <ul style="margin: 0.5rem 0 0 1.5rem;">
             <li><strong>Erreurs:</strong> Messages qui n'ont pas pu être traités (bounces, erreurs SMTP, etc.)</li>
-            <li><strong>Refusés:</strong> Messages refusés par modération ou envoyés par des expéditeurs non autorisés</li>
+            <li><strong>Refusés:</strong> Messages refusés par modération ou envoyés par des expéditeurs non autorisés — la liste visée et la raison sont relues avec les listes, abonnés et blocages d'aujourd'hui</li>
         </ul>
     </div>
 </div>

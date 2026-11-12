@@ -5,7 +5,9 @@
  *    last n sequence numbers (the folder runs oldest first), MailProcessor::newestFirst() sorts by date;
  *  - the sidebar's subscriber count reads ONE key, `subscriber_count`, that both list queries return
  *    (the dashboard's getAll() had it, the sidebar read `count`: one warning per list, counts blank);
- *  - a dashboard row opens its list: every cell holds a real link to the edit page, Modifier stays.
+ *  - a dashboard row opens its list: every cell holds a real link to the edit page, Modifier stays;
+ *  - a Refusés card names the list(s) the message named and why (MailProcessor::refusalReason, in
+ *    dispatch()'s order).
  * Run: php tests/ui_order_count_test.php   (exit 0 = all green)
  */
 
@@ -133,6 +135,40 @@ foreach (array('atelier', 'bar') as $i => $name) {
     check("dashboard $name: one tab stop besides Modifier", 3, substr_count($row, 'tabindex="-1"'));
     check("dashboard $name: Modifier stays", 1, preg_match('#href="\?page=list&action=edit&name=' . $name . '"\s+class="btn btn-sm btn-secondary"#', $row));
 }
+
+// --- Refusés: the reason, in dispatch()'s order ----------------------------------------------------
+$open = array('nom' => 'atelier', 'active' => 1, 'moderation' => 0);
+$off = array('nom' => 'ancien', 'active' => 0, 'moderation' => 0);
+$mod = array('nom' => 'annonces', 'active' => 1, 'moderation' => 1);
+$block = array('spam@x.org' => 1);
+$abos = array('rene@example.fr');
+check('reason: blocked first, whatever the list', 'blocked', MailProcessor::refusalReason('Spam@X.org', array($open), $block, $abos));
+check('reason: not on any discussion list', 'not-subscriber', MailProcessor::refusalReason('inconnu@x.org', array($open), $block, $abos));
+check('reason: not-subscriber before inactive', 'not-subscriber', MailProcessor::refusalReason('inconnu@x.org', array($off), $block, $abos));
+check('reason: inactive list', 'inactive', MailProcessor::refusalReason('Rene@example.fr', array($off), $block, $abos));
+check('reason: moderated list = the moderator refused it', 'moderator', MailProcessor::refusalReason('rene@example.fr', array($mod), $block, $abos));
+check('reason: inactive + moderated → moderator (PENDING won)', 'moderator', MailProcessor::refusalReason('rene@example.fr', array($off, $mod), $block, $abos));
+check('reason: would be approved today → unknown', 'unknown', MailProcessor::refusalReason('rene@example.fr', array($open), $block, $abos));
+check('reason: no list named → unknown', 'unknown', MailProcessor::refusalReason('rene@example.fr', array(), $block, $abos));
+
+$warnings = array();
+set_error_handler(function ($no, $str) use (&$warnings) { $warnings[] = $str; return true; });
+$errorMsg = null;
+$errors = array(array('uid' => 9, 'from' => 'mailer-daemon@x.org', 'subject' => 'Undelivered', 'date' => 1000, 'body_preview' => ''));
+$discarded = array(
+    array('uid' => 7, 'from' => 'inconnu@x.org', 'subject' => 'Salut', 'date' => 3000, 'body_preview' => '', 'lists' => array('atelier', 'bar'), 'reason' => 'not-subscriber'),
+    array('uid' => 6, 'from' => 'rene@example.fr', 'subject' => 'Annonce', 'date' => false, 'body_preview' => '', 'lists' => array(), 'reason' => 'unknown'),
+);
+$lists = array();
+$currentPage = 'errors';
+ob_start();
+include ROOT_PATH . '/templates/errors.php';
+$html = ob_get_clean();
+restore_error_handler();
+check('errors page: no warning', array(), $warnings);
+check('Refusés: lists named, and why', 1, preg_match('~atelier, bar\s*—\s*<strong>l&#039;expéditeur n&#039;est abonné à aucune liste de discussion</strong>~', $html));
+check('Refusés: no list, unknown reason', 1, preg_match('#aucune liste</span>\s*—\s*<strong>raison inconnue#', $html));
+check('a reason line per Refusés card, none on Erreurs', 2, preg_match_all('~<span class="material-icons"[^>]*>mail</span>~', $html));
 
 echo "ui order/count: $checks checks, $failures failed\n";
 exit($failures ? 1 : 0);
