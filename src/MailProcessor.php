@@ -40,6 +40,7 @@ class MailProcessor {
     private array $blocklist = [];
     private $imap;
     private $smtpConnection = null; // Reusable SMTP connection
+    private array $blockedUnknown = []; // refused as unknown at RCPT TO this run, for the admin notice
     
     private array $log = [];
     private array $stats = [
@@ -269,6 +270,7 @@ class MailProcessor {
         if ($this->smtpConnection === null) {
             $startTime = microtime(true);
             $this->smtpConnection = new \PHPMailer();
+            $this->smtpConnection->setSMTPInstance(new TrackingSMTP()); // per-recipient outcome, see sendMailWithRetry()
             $this->smtpConnection->isSMTP();
             $this->smtpConnection->Host = $this->smtpHost;
             $this->smtpConnection->Port = $this->smtpPort;
@@ -324,6 +326,11 @@ class MailProcessor {
         while ($attempts < $this->maxSendRetries) {
             $attempts++;
             
+            $smtp = $mail->getSMTPInstance();
+            if ($smtp instanceof TrackingSMTP) {
+                $smtp->clearOutcome();
+            }
+
             try {
                 if ($mail->send()) {
                     if ($attempts > 1) {
@@ -337,6 +344,19 @@ class MailProcessor {
                 $lastError = $mail->ErrorInfo;
             } catch (Exception $e) {
                 $lastError = $e->getMessage();
+            }
+
+            // DATA accepted = sent. A recipient refused at RCPT TO fails send() although the message
+            // went out to all the others: sending it again would give each of them another copy
+            // (audit 2026-11-12, finding 2). Unless only our own address took it (a broadcast
+            // list's To), it is sent: the refusals are logged and never retried.
+            if ($smtp instanceof TrackingSMTP && $smtp->dataAccepted) {
+                $accepted = array_diff_key($mail->getAllRecipientAddresses(), $smtp->refused);
+                unset($accepted[strtolower($mail->From)]);
+                if (!empty($accepted)) {
+                    $this->recipientsRefused($smtp->refused, $context);
+                    return true;
+                }
             }
             
             if ($attempts < $this->maxSendRetries) {
@@ -356,6 +376,43 @@ class MailProcessor {
             'context' => $context
         ]);
         return false;
+    }
+
+    /**
+     * A message went out, but these recipients were refused at RCPT TO. Each one is logged; one the
+     * server does not know (550, status 5.1.x) is blocked, as a 550 bounce is in dispatch(), and the
+     * admin is told at the end of the run. Any other refusal (a policy, a limit) blocks nobody.
+     */
+    private function recipientsRefused(array $refused, string $context): void {
+        foreach ($refused as $email => $r) {
+            $unknown = $r['code'] === 550 && str_starts_with($r['code_ex'], '5.1.');
+            $this->log('warning', '⚠️ Recipient refused, message sent to the others: ' . $email, [
+                'email' => $email,
+                'code' => trim($r['code'] . ' ' . $r['code_ex']),
+                'detail' => $r['detail'],
+                'blocked' => $unknown,
+                'context' => $context
+            ]);
+            if ($unknown && !isset($this->blocklist[$email])) {
+                $this->blocklistManager->block($email, 550);
+                $this->blocklist[$email] = 550;
+                $this->blockedUnknown[] = $email;
+                $this->stats['blocked']++;
+            }
+        }
+    }
+
+    /**
+     * The admin notice for each address recipientsRefused() blocked, worded as dispatch()'s for a
+     * bounce. Sent once the run's sends are over: mail() reuses the one connection's message.
+     */
+    private function notifyBlockedRecipients(): void {
+        foreach ($this->blockedUnknown as $email) {
+            $mail = $this->mail('[Listes] adresse inconnue', $this->adminmail);
+            $mail->msgHTML("Bonjour,<br />l'adresse <strong>" . htmlspecialchars($email) . "</strong> a été désactivée,<br />internet ne la connait pas..");
+            $this->sendMailWithRetry($mail, 'unknown recipient notification');
+        }
+        $this->blockedUnknown = [];
     }
 
     /**
@@ -578,6 +635,9 @@ class MailProcessor {
             $this->log('warning', '⚠️ Error cleaning temp files: ' . $e->getMessage());
         }
         
+        // Tell the admin about recipients blocked as unknown during the sends above
+        $this->notifyBlockedRecipients();
+
         // Close SMTP connection if it was used
         if ($this->smtpConnection !== null) {
             try {
