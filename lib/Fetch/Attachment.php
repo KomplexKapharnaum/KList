@@ -190,7 +190,7 @@ class Attachment
     {
         $path = rtrim($path, '/') . '/';
 
-        if (is_dir($path))
+        if (is_dir($path) && '' !== (string) $this->getFileName())
             return $this->saveAs($path . $this->getFileName());
 
         return false;
@@ -245,6 +245,36 @@ class Attachment
 
     protected function setFileName($text)
     {
-        $this->filename = MIME::decode($text, Message::$charset);
+        $this->filename = self::safeFileName($text);
+    }
+
+    /**
+     * The sender's file name, decoded and made safe to append to a directory: saveToDirectory()
+     * must never write outside it. Keeps only the last path component (`/` or `\`), drops control
+     * characters and leading dots (no `..`, no `.htaccess`). An undeclared raw UTF-8 name is kept as
+     * is: decoding it as ASCII used to turn it into "". Returns "" when nothing is left.
+     *
+     * @param  string $text
+     * @return string
+     */
+    public static function safeFileName($text)
+    {
+        $name = '';
+
+        foreach (MimeParser::mimeHeaderDecode((string) $text) as $word) {
+            if ('default' === $word->charset && preg_match('//u', $word->text)) {
+                $converted = iconv('UTF-8', Message::$charset, $word->text);
+            } else {
+                $charset   = 'default' === $word->charset ? 'ascii' : $word->charset;
+                $converted = iconv($charset, Message::$charset, $word->text);
+            }
+            $name .= (string) $converted;
+        }
+
+        $name = preg_replace('/[\x00-\x1F\x7F]/', '', $name);
+        $parts = preg_split('#[/\\\\]#', $name);
+        $name = ltrim((string) end($parts), '.');
+
+        return $name;
     }
 }
