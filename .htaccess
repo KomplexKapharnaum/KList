@@ -31,6 +31,10 @@
     
     # Deny access to lib directory (libraries)
     RewriteRule ^lib/ - [F,L]
+
+    # Deny access to the tests and their fixtures, and to the repo's scripts
+    RewriteRule ^tests/ - [F,L]
+    RewriteRule ^scripts/ - [F,L]
 </IfModule>
 
 # Security headers

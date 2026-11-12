@@ -298,7 +298,8 @@ final class MimeParser
 
         $part->type = isset(self::TYPES[$type]) ? self::TYPES[$type] : 8;
         $cte = strtolower(trim((string) self::headerValue($fields, 'content-transfer-encoding')));
-        $part->encoding = $cte === '' ? 0 : (isset(self::ENCODINGS[$cte]) ? self::ENCODINGS[$cte] : 5);
+        // A multipart has no encoding in BODYSTRUCTURE: ext-imap reported 0 whatever the header says.
+        $part->encoding = $cte === '' || $part->type === 1 ? 0 : (isset(self::ENCODINGS[$cte]) ? self::ENCODINGS[$cte] : 5);
         $part->ifsubtype = 1;
         $part->subtype = strtoupper($subtype);
         self::setOptional($part, 'description', self::headerValue($fields, 'content-description'));
@@ -436,9 +437,11 @@ final class MimeParser
     }
 
     /**
-     * imap_fetchbody(): the raw bytes of a section ("1", "1.2", …) as IMAP numbers them. A
-     * message/rfc822 section returns the whole encapsulated message; its children number from its
-     * body. Unknown section → "".
+     * imap_fetchbody(): the raw bytes of a section ("1", "1.2", …), resolved the way c-client's
+     * mail_body() resolved it before ext-imap fetched anything. A multipart takes the part's
+     * number; any other part answers only to 1; a message/rfc822 section is the whole
+     * encapsulated message and only it may be descended into, its numbers counting from its
+     * body. A number past a leaf ("3.1.1" where 3.1 is text) is no section → "", as ext-imap gave.
      *
      * @param  string $raw
      * @param  string $section
@@ -448,25 +451,34 @@ final class MimeParser
     {
         list($header, $body) = self::splitMessage($raw);
         $fields = self::parseHeaders($header);
+        $default = 'text';
+        $numbers = explode('.', (string) $section);
 
-        foreach (explode('.', (string) $section) as $n) {
+        foreach ($numbers as $k => $n) {
+            if (!ctype_digit($n) || (int) $n < 1)
+                return '';
             $n = (int) $n;
-            list($type, $subtype, $params) = self::parseContentType(self::headerValue($fields, 'content-type'), 'text');
+            list($type, $subtype, $params) = self::parseContentType(self::headerValue($fields, 'content-type'), $default);
+            if ($type === 'multipart') {
+                $chunks = self::splitMultipart($body, self::paramValue($params, 'boundary'));
+                if (!isset($chunks[$n - 1]))
+                    return '';
+                list($header, $body) = self::splitPart($chunks[$n - 1]);
+                $fields = self::parseHeaders($header);
+                $default = strtolower($subtype) === 'digest' ? 'message/rfc822' : 'text';
+                list($type, $subtype) = self::parseContentType(self::headerValue($fields, 'content-type'), $default);
+            } elseif ($n !== 1) {
+                return '';
+            }
+            if ($k === count($numbers) - 1)
+                break;
             if ($type === 'message' && strtolower($subtype) === 'rfc822') {
                 list($header, $body) = self::splitMessage($body);
                 $fields = self::parseHeaders($header);
-                list($type, $subtype, $params) = self::parseContentType(self::headerValue($fields, 'content-type'), 'text');
-            }
-            if ($type !== 'multipart') {
-                if ($n !== 1)
-                    return '';
-                continue;   // section 1 of a single part is its own body
-            }
-            $chunks = self::splitMultipart($body, self::paramValue($params, 'boundary'));
-            if (!isset($chunks[$n - 1]))
+                $default = 'text';
+            } elseif ($type !== 'multipart') {
                 return '';
-            list($header, $body) = self::splitPart($chunks[$n - 1]);
-            $fields = self::parseHeaders($header);
+            }
         }
 
         return $body;

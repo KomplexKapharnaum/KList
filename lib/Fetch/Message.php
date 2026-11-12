@@ -548,28 +548,8 @@ class Message
 
             $messageBody = self::decode($messageBody, $structure->encoding);
 
-            if (!empty($parameters['charset']) && $parameters['charset'] !== self::$charset) {
-                $mb_converted = false;
-                if (function_exists('mb_convert_encoding')) {
-                    if (!in_array($parameters['charset'], mb_list_encodings())) {
-                        if ($structure->encoding === 0) {
-                            $parameters['charset'] = 'US-ASCII';
-                        } else {
-                            $parameters['charset'] = 'UTF-8';
-                        }
-                    }
-
-                    $messageBody = @mb_convert_encoding($messageBody, self::$charset, $parameters['charset']);
-                    $mb_converted = true;
-                }
-                if (!$mb_converted) {
-                    $messageBodyConv = @iconv($parameters['charset'], self::$charset . self::$charsetFlag, $messageBody);
-
-                    if ($messageBodyConv !== false) {
-                        $messageBody = $messageBodyConv;
-                    }
-                }
-            }
+            if (!empty($parameters['charset']))
+                $messageBody = self::convertCharset($messageBody, $parameters['charset'], $structure->encoding);
 
             if (strtolower($structure->subtype) === 'plain' || ($structure->type == 1 && strtolower($structure->subtype) !== 'alternative')) {
                 if (isset($this->plaintextMessage)) {
@@ -601,6 +581,55 @@ class Message
                 $this->processStructure($part, $partId);
             }
         }
+    }
+
+    /**
+     * Converts a decoded body from its declared charset to self::$charset: mbstring when loaded,
+     * iconv otherwise. Charset names are matched as MIME means them, case-insensitively and by
+     * alias ("iso-8859-1", "latin1"); a charset mbstring does not know falls back to US-ASCII for
+     * a 7bit body, UTF-8 otherwise.
+     *
+     * @param  string $body
+     * @param  string $charset
+     * @param  int    $encoding
+     * @return string
+     */
+    public static function convertCharset($body, $charset, $encoding)
+    {
+        if ($charset === self::$charset)
+            return $body;
+
+        if (function_exists('mb_convert_encoding')) {
+            if (!self::mbKnowsCharset($charset))
+                $charset = $encoding === 0 ? 'US-ASCII' : 'UTF-8';
+
+            return @mb_convert_encoding($body, self::$charset, $charset);
+        }
+
+        $converted = @iconv($charset, self::$charset . self::$charsetFlag, $body);
+
+        return $converted !== false ? $converted : $body;
+    }
+
+    /**
+     * Whether mbstring knows a charset, by name or alias, in any case.
+     *
+     * @param  string $charset
+     * @return bool
+     */
+    protected static function mbKnowsCharset($charset)
+    {
+        static $known = null;
+        if ($known === null) {
+            $known = array();
+            foreach (mb_list_encodings() as $name) {
+                $known[strtolower($name)] = true;
+                foreach (mb_encoding_aliases($name) as $alias)
+                    $known[strtolower($alias)] = true;
+            }
+        }
+
+        return isset($known[strtolower($charset)]);
     }
 
     /**

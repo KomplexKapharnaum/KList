@@ -127,6 +127,31 @@ foreach (array("\r\n" => 'crlf', "\n" => 'lf') as $eol => $tag) {
     check("$tag rfc822: section 2 = whole message", true, strpos(MimeParser::section($raw, '2'), "From: carol@example.com") === 0);
     check("$tag rfc822: section 2.1 = inner plain", "inner plain", MimeParser::section($raw, '2.1'));
     check("$tag rfc822: section 2.2 = inner html", "<p>inner html</p>", MimeParser::section($raw, '2.2'));
+    // Fetch numbers the encapsulated alternative "2.1" and its parts "2.1.1"/"2.1.2"; IMAP has no
+    // such sections (2.1 is already text/plain), so ext-imap returned "" and the body took no text.
+    check("$tag rfc822: 2.1.1 past a leaf = nothing", '', MimeParser::section($raw, '2.1.1'));
+    check("$tag rfc822: 2.1.2 past a leaf = nothing", '', MimeParser::section($raw, '2.1.2'));
+    check("$tag rfc822: 1.1 past a leaf = nothing", '', MimeParser::section($raw, '1.1'));
+    check("$tag rfc822: section 0 = nothing", '', MimeParser::section($raw, '0'));
+    check("$tag rfc822: section 2. = nothing", '', MimeParser::section($raw, '2.'));
+}
+
+foreach (array("\r\n" => 'crlf', "\n" => 'lf') as $eol => $tag) {
+    // --- one-part messages, and a message that is itself message/rfc822 ----------------------
+    $raw = str_replace("\n", $eol, "Subject: x\nContent-Type: text/plain\n\nonly part\n");
+    check("$tag single: section 1 = body", "only part$eol", MimeParser::section($raw, '1'));
+    check("$tag single: section 2 = nothing", '', MimeParser::section($raw, '2'));
+    $raw = str_replace("\n", $eol, "Subject: x\nContent-Type: message/rfc822\n\nSubject: in\n\ninner\n");
+    check("$tag top rfc822: section 1 = whole inner message", "Subject: in{$eol}{$eol}inner$eol", MimeParser::section($raw, '1'));
+    check("$tag top rfc822: section 1.1 = inner body", "inner$eol", MimeParser::section($raw, '1.1'));
+    // multipart/digest: a part with no Content-Type is a message/rfc822
+    $raw = str_replace("\n", $eol, "Content-Type: multipart/digest; boundary=d\n\n--d\n\nSubject: a\n\ndigest one\n--d--\n");
+    check("$tag digest: 1.1 = body of the digested message", "digest one", MimeParser::section($raw, '1.1'));
+    // A multipart has no encoding in BODYSTRUCTURE: ext-imap said 0 whatever the header claims.
+    $raw = str_replace("\n", $eol, "Content-Type: multipart/mixed; boundary=b\nContent-Transfer-Encoding: quoted-printable\n\n--b\nContent-Type: text/plain\nContent-Transfer-Encoding: 8bit\n\nx\n--b--\n");
+    $s = MimeParser::structure($raw);
+    check("$tag multipart: encoding 0 despite its header", 0, $s->encoding);
+    check("$tag multipart: its parts keep theirs", 1, $s->parts[0]->encoding);
 }
 
 // --- imap_mime_header_decode contract ----------------------------------------------------------

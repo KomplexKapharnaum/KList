@@ -35,6 +35,16 @@ if [ -n "$dep" ]; then
 fi
 echo "verify: no PHP 8.5 deprecation left"
 
+# The repo is the docroot: every tracked top-level directory but assets/ must be denied by
+# .htaccess, or a new one (as tests/ and scripts/ were) is served as it stands.
+open=$(git ls-files | grep / | cut -d/ -f1 | sort -u | grep -vx assets \
+    | while read -r d; do grep -qE "^[[:space:]]*RewriteRule \^$d/ - \[F" .htaccess || echo "$d/"; done)
+if [ -n "$open" ]; then
+    echo "verify: not denied by .htaccess: $open" >&2
+    exit 1
+fi
+echo "verify: .htaccess denies every directory but assets/"
+
 # Tests run with every notice on: a deprecation (dynamic property…) or warning is a failure.
 for t in tests/*_test.php; do
     out=$(php -d error_reporting=-1 -d display_errors=stderr -d log_errors=0 "$t" 2>&1) \
