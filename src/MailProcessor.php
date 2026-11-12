@@ -1236,7 +1236,7 @@ class MailProcessor {
         
         try {
             $this->imap->setMailBox($folder);
-            $uids = $this->imap->getMessageUids($limit);
+            $uids = $this->imap->getMessageUids($limit, true);
             
             foreach ($uids as $uid) {
                 try {
@@ -1263,6 +1263,17 @@ class MailProcessor {
             // Ignore errors
         }
         
+        return self::newestFirst($messages);
+    }
+
+    /**
+     * Sort folder messages by date, newest first (an unknown date sorts last).
+     */
+    public static function newestFirst(array $messages): array {
+        usort($messages, function ($a, $b) {
+            return ((int)($b['date'] ?? 0) <=> (int)($a['date'] ?? 0))
+                ?: (($b['uid'] ?? 0) <=> ($a['uid'] ?? 0));
+        });
         return $messages;
     }
 }

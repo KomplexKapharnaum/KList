@@ -73,7 +73,7 @@
                             <a href="<?= url('?page=list&action=edit&name=' . urlencode($list['nom'])) ?>">
                                 <span class="icon material-icons">mail</span>
                                 <span><?= e($list['nom']) ?></span>
-                                <span class="count"><?= $list['count'] ?></span>
+                                <span class="count"><?= (int)($list['subscriber_count'] ?? 0) ?></span>
                             </a>
                         </li>
                         <?php endforeach; ?>

@@ -26,7 +26,7 @@ class ListManager {
     public function getAllLabels(): array {
         return $this->db->fetchAll("
             SELECT l.id, l.nom, 
-                   (SELECT COUNT(*) FROM subscribers s WHERE s.liste_id = l.id AND s.active = 1) as count
+                   (SELECT COUNT(*) FROM subscribers s WHERE s.liste_id = l.id AND s.active = 1) as subscriber_count
             FROM listes l 
             ORDER BY l.nom ASC
         ");

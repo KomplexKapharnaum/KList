@@ -595,17 +595,23 @@ class Server
      * @param  null|int $limit Maximum number of UIDs to return
      * @return array    Array of message UIDs
      */
-    public function getMessageUids($limit = null)
+    public function getMessageUids($limit = null, $newest = false)
     {
         $numMessages = $this->numMessages();
+        $first = 1;
 
-        if (isset($limit) && is_numeric($limit) && $limit < $numMessages)
-            $numMessages = $limit;
+        if (isset($limit) && is_numeric($limit) && $limit < $numMessages) {
+            // $newest: the LAST $limit messages of the folder (sequence numbers run oldest first)
+            if ($newest)
+                $first = $numMessages - (int) $limit + 1;
+            else
+                $numMessages = $limit;
+        }
 
         if ($numMessages < 1)
             return array();
 
-        $items = $this->getImapStream()->fetch('1:' . (int) $numMessages, '(UID)');
+        $items = $this->getImapStream()->fetch($first . ':' . (int) $numMessages, '(UID)');
         ksort($items);
         $uids = array();
         foreach ($items as $item) {
