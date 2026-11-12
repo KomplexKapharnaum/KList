@@ -22,10 +22,12 @@ fi
 echo "verify: no imap_*() call"
 
 # PHP 8.5 deprecations named by the port (dev37 runs 8.4, so 8.5-only ones are grepped):
-# non-canonical casts, PHPMailer::$isHTML set as a property, index.php catching only Exception
+# non-canonical casts, PHPMailer::$isHTML set as a property, Reflection*::setAccessible() (a
+# no-op since 8.1, deprecated in 8.5: the box's verify failed on one in a test, 2026-11-12),
+# PDO's SQLITE_* constants (Pdo\Sqlite::* since 8.5), index.php catching only Exception
 # around IMAP (a missing extension or a TypeError must give a message, not a 500).
 dep=$(git ls-files '*.php' | grep -v '^lib/PHPMailer/' \
-    | xargs grep -nE '\((integer|boolean|double|binary)\)|->isHTML[[:space:]]*=[^=]' \
+    | xargs grep -nE '\((integer|boolean|double|binary)\)|->isHTML[[:space:]]*=[^=]|->setAccessible[[:space:]]*\(|PDO::SQLITE_' \
     | grep -vE '^[^:]+:[0-9]+:[[:space:]]*(\*|//|/\*)' || true)
 dep+=$(grep -nE 'catch[[:space:]]*\([[:space:]]*\\?Exception[[:space:]]' index.php || true)
 if [ -n "$dep" ]; then

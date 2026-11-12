@@ -197,7 +197,6 @@ function manager(FakeDatabase $db)
 {
     $lm = (new ReflectionClass('ListManager'))->newInstanceWithoutConstructor();
     $p = new ReflectionProperty('ListManager', 'db');
-    $p->setAccessible(true);
     $p->setValue($lm, $db);
     return $lm;
 }
