@@ -4,7 +4,8 @@
  *  - Erreurs and Refusés show the NEWEST messages first: Server::getMessageUids($n, true) asks for the
  *    last n sequence numbers (the folder runs oldest first), MailProcessor::newestFirst() sorts by date;
  *  - the sidebar's subscriber count reads ONE key, `subscriber_count`, that both list queries return
- *    (the dashboard's getAll() had it, the sidebar read `count`: one warning per list, counts blank).
+ *    (the dashboard's getAll() had it, the sidebar read `count`: one warning per list, counts blank);
+ *  - a dashboard row opens its list: every cell holds a real link to the edit page, Modifier stays.
  * Run: php tests/ui_order_count_test.php   (exit 0 = all green)
  */
 
@@ -88,6 +89,7 @@ check('getAllLabels() returns subscriber_count', 1, preg_match('/\bas subscriber
 
 function url($p) { return $p; }
 function asset($p) { return $p; }
+function setting($k, $d = null) { return $k === 'domains' ? 'kxkm.net' : $d; }
 function e($s) { return htmlspecialchars((string) $s, ENT_QUOTES, 'UTF-8'); }
 
 $warnings = array();
@@ -104,6 +106,33 @@ $html = ob_get_clean();
 restore_error_handler();
 check('layout: no warning', array(), $warnings);
 check('layout: the count shows', 1, preg_match('#<span class="count">7</span>#', $html));
+
+// --- dashboard: the row is a link -----------------------------------------------------------------
+$warnings = array();
+set_error_handler(function ($no, $str) use (&$warnings) { $warnings[] = $str; return true; });
+$lists = array(
+    array('id' => 1, 'nom' => 'atelier', 'subscriber_count' => 7, 'last_used' => null, 'active' => 1, 'moderation' => 0),
+    array('id' => 2, 'nom' => 'bar', 'subscriber_count' => 3, 'last_used' => '2026-11-10 12:00:00', 'active' => 0, 'moderation' => 1),
+);
+$lastCronRun = null;
+$cronKey = 'k';
+$uniqueSubscribers = 9;
+$currentPage = 'dashboard';
+ob_start();
+include ROOT_PATH . '/templates/dashboard.php';
+$html = ob_get_clean();
+restore_error_handler();
+check('dashboard: no warning', array(), $warnings);
+preg_match_all('#<tr class="row-clickable">(.*?)</tr>#s', $html, $rows);
+check('dashboard: one clickable row per list', 2, count($rows[1]));
+foreach (array('atelier', 'bar') as $i => $name) {
+    $row = $rows[1][$i] ?? '';
+    preg_match_all('#<td class="row-cell">\s*<a class="row-link" href="([^"]*)"#', $row, $cells);
+    check("dashboard $name: four cells link", 4, count($cells[1]));
+    check("dashboard $name: all to its edit page", array_fill(0, 4, '?page=list&action=edit&name=' . $name), $cells[1]);
+    check("dashboard $name: one tab stop besides Modifier", 3, substr_count($row, 'tabindex="-1"'));
+    check("dashboard $name: Modifier stays", 1, preg_match('#href="\?page=list&action=edit&name=' . $name . '"\s+class="btn btn-sm btn-secondary"#', $row));
+}
 
 echo "ui order/count: $checks checks, $failures failed\n";
 exit($failures ? 1 : 0);

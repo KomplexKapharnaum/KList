@@ -156,35 +156,42 @@ function formatElapsed($seconds) {
             </thead>
             <tbody>
                 <?php foreach ($lists as $list): ?>
-                <tr>
-                    <td>
-                        <strong><?= e($list['nom']) ?></strong>
-                        <div class="text-muted" style="font-size: 0.8rem;">
-                            <?= e($list['nom']) ?>@<?= e(setting('domains', 'example.com')) ?>
-                        </div>
+                <?php $editUrl = url('?page=list&action=edit&name=' . urlencode($list['nom'])); ?>
+                <tr class="row-clickable">
+                    <td class="row-cell">
+                        <a class="row-link" href="<?= $editUrl ?>">
+                            <strong><?= e($list['nom']) ?></strong>
+                            <div class="text-muted" style="font-size: 0.8rem;">
+                                <?= e($list['nom']) ?>@<?= e(setting('domains', 'example.com')) ?>
+                            </div>
+                        </a>
                     </td>
-                    <td><?= $list['subscriber_count'] ?></td>
-                    <td>
-                        <?php if (!empty($list['last_used'])): ?>
-                        <span class="text-muted" style="font-size: 0.9rem;">
-                            <?= date('d/m/Y', strtotime($list['last_used'])) ?>
-                        </span>
-                        <?php else: ?>
-                        <span class="text-muted" style="font-size: 0.85rem;">—</span>
-                        <?php endif; ?>
+                    <td class="row-cell"><a class="row-link" href="<?= $editUrl ?>" tabindex="-1"><?= (int)$list['subscriber_count'] ?></a></td>
+                    <td class="row-cell">
+                        <a class="row-link" href="<?= $editUrl ?>" tabindex="-1">
+                            <?php if (!empty($list['last_used'])): ?>
+                            <span class="text-muted" style="font-size: 0.9rem;">
+                                <?= date('d/m/Y', strtotime($list['last_used'])) ?>
+                            </span>
+                            <?php else: ?>
+                            <span class="text-muted" style="font-size: 0.85rem;">—</span>
+                            <?php endif; ?>
+                        </a>
+                    </td>
+                    <td class="row-cell">
+                        <a class="row-link" href="<?= $editUrl ?>" tabindex="-1">
+                            <?php if ($list['active']): ?>
+                            <span class="badge badge-success">Active</span>
+                            <?php else: ?>
+                            <span class="badge badge-danger">Inactive</span>
+                            <?php endif; ?>
+                            <?php if ($list['moderation']): ?>
+                            <span class="badge badge-warning">Modérée</span>
+                            <?php endif; ?>
+                        </a>
                     </td>
                     <td>
-                        <?php if ($list['active']): ?>
-                        <span class="badge badge-success">Active</span>
-                        <?php else: ?>
-                        <span class="badge badge-danger">Inactive</span>
-                        <?php endif; ?>
-                        <?php if ($list['moderation']): ?>
-                        <span class="badge badge-warning">Modérée</span>
-                        <?php endif; ?>
-                    </td>
-                    <td>
-                        <a href="<?= url('?page=list&action=edit&name=' . urlencode($list['nom'])) ?>" 
+                        <a href="<?= $editUrl ?>" 
                            class="btn btn-sm btn-secondary">
                             <span class="material-icons">edit</span>
                             Modifier

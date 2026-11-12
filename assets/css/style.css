@@ -398,6 +398,22 @@ textarea.form-control {
     border-bottom: none;
 }
 
+/* A row that opens its item: each cell holds a real link filling the cell (no JS). */
+.table tr.row-clickable {
+    cursor: pointer;
+}
+
+.table td.row-cell {
+    padding: 0;
+}
+
+.table td.row-cell > a.row-link {
+    display: block;
+    padding: 0.75rem 1rem;
+    color: inherit;
+    text-decoration: none;
+}
+
 /* Subscribers list */
 .subscriber-list {
     /* max-height: 400px; */
