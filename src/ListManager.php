@@ -32,6 +32,41 @@ class ListManager {
         ");
     }
 
+    /**
+     * Ask the mail host whether every address of the list(s) exists (one SMTP session per domain,
+     * never DATA) and store the verdict and its date on each list. $nom = null → every list.
+     * @return array<string,array{0:string,1:string[]}> list name => [status, missing addresses]
+     */
+    public function checkAddresses(?string $nom = null, ?AddressCheck $checker = null): array {
+        $lists = $nom === null
+            ? $this->db->fetchAll("SELECT id, nom FROM listes")
+            : array_values(array_filter([$this->getByName(strtolower($nom))]));
+        $domains = array_values(array_filter(array_map('trim', explode(',', $this->db->getSetting('domains', '')))));
+        $mailbox = $this->db->getSetting('imap_user', '');
+        if (!$lists || !$domains || $mailbox === '') {
+            return [];
+        }
+        $checker = $checker ?? new AddressCheck();
+
+        $results = [];
+        foreach ($domains as $domain) {
+            $addresses = array_map(fn($l) => $l['nom'] . '@' . $domain, $lists);
+            $results += $checker->check($domain, $addresses, $mailbox);
+        }
+
+        $now = date('Y-m-d H:i:s');
+        $verdicts = [];
+        foreach ($lists as $l) {
+            $verdict = AddressCheck::verdict($results, array_map(fn($d) => $l['nom'] . '@' . $d, $domains));
+            $this->db->execute(
+                "UPDATE listes SET address_check = ?, address_missing = ?, address_checked_at = ? WHERE id = ?",
+                [$verdict[0], implode(', ', $verdict[1]), $now, $l['id']]
+            );
+            $verdicts[$l['nom']] = $verdict;
+        }
+        return $verdicts;
+    }
+
     // Get single list by ID
     public function getById(int $id): ?array {
         return $this->db->fetchOne("SELECT * FROM listes WHERE id = ?", [$id]);

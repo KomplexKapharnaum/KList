@@ -624,3 +624,20 @@ textarea.form-control {
 ::-webkit-scrollbar-thumb:hover {
     background: var(--accent-dark);
 }
+
+/* A list whose address the mail host does not know (AddressCheck, #t-077): red; unverifiable: grey */
+.row-address-missing td {
+    background: var(--danger-bg);
+}
+
+.address-missing {
+    color: var(--danger);
+    font-size: 0.8rem;
+    font-weight: 600;
+}
+
+.address-unverifiable {
+    color: var(--text-muted);
+    font-size: 0.8rem;
+    font-style: italic;
+}

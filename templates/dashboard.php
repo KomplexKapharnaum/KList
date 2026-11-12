@@ -25,18 +25,20 @@ if (!empty($lastCronRun)) {
     }
 }
 
-function formatElapsed($seconds) {
-    if ($seconds < 60) {
-        return $seconds . ' sec';
-    } elseif ($seconds < 3600) {
-        return round($seconds / 60) . ' min';
-    } elseif ($seconds < 86400) {
-        $hours = floor($seconds / 3600);
-        $mins = round(($seconds % 3600) / 60);
-        return $hours . 'h ' . $mins . 'min';
-    } else {
-        $days = floor($seconds / 86400);
-        return $days . ' jour(s)';
+if (!function_exists('formatElapsed')) { // the template may be rendered twice in one process (tests)
+    function formatElapsed($seconds) {
+        if ($seconds < 60) {
+            return $seconds . ' sec';
+        } elseif ($seconds < 3600) {
+            return round($seconds / 60) . ' min';
+        } elseif ($seconds < 86400) {
+            $hours = floor($seconds / 3600);
+            $mins = round(($seconds % 3600) / 60);
+            return $hours . 'h ' . $mins . 'min';
+        } else {
+            $days = floor($seconds / 86400);
+            return $days . ' jour(s)';
+        }
     }
 }
 ?>
@@ -119,6 +121,14 @@ function formatElapsed($seconds) {
                 <span class="material-icons">error_outline</span>
                 Erreurs / Refusés
             </a>
+            <form method="post" action="<?= url('?page=dashboard') ?>" style="margin: 0;">
+                <input type="hidden" name="csrf_token" value="<?= e(csrf_token()) ?>">
+                <button type="submit" name="check_addresses" value="1" class="btn btn-secondary"
+                        title="Demande au serveur mail si chaque adresse de liste existe (aucun message envoyé)">
+                    <span class="material-icons">fact_check</span>
+                    Vérifier les adresses
+                </button>
+            </form>
             <?php if (!empty($cronKey)): ?>
             <a href="<?= url('cron.php?key=' . urlencode($cronKey)) ?>" class="btn btn-secondary" target="_blank">
                 <span class="material-icons">sync</span>
@@ -157,13 +167,27 @@ function formatElapsed($seconds) {
             <tbody>
                 <?php foreach ($lists as $list): ?>
                 <?php $editUrl = url('?page=list&action=edit&name=' . urlencode($list['nom'])); ?>
-                <tr class="row-clickable">
+                <?php
+                    $addressCheck = $list['address_check'] ?? '';
+                    $checkedAt = !empty($list['address_checked_at'])
+                        ? 'vérifié le ' . date('d/m/Y à H:i', strtotime($list['address_checked_at'])) : '';
+                ?>
+                <tr class="row-clickable<?= $addressCheck === 'missing' ? ' row-address-missing' : '' ?>">
                     <td class="row-cell">
                         <a class="row-link" href="<?= $editUrl ?>">
                             <strong><?= e($list['nom']) ?></strong>
                             <div class="text-muted" style="font-size: 0.8rem;">
                                 <?= e($list['nom']) ?>@<?= e(setting('domains', 'example.com')) ?>
                             </div>
+                            <?php if ($addressCheck === 'missing'): ?>
+                            <?php foreach (array_filter(explode(', ', (string) ($list['address_missing'] ?? ''))) as $missingAddress): ?>
+                            <div class="address-missing" title="<?= e($checkedAt) ?>">
+                                <?= e($missingAddress) ?> n'existe pas chez l'hébergeur mail : ajoutez l'alias vers <?= e(setting('imap_user', '')) ?>
+                            </div>
+                            <?php endforeach; ?>
+                            <?php elseif ($addressCheck === 'unverifiable'): ?>
+                            <div class="address-unverifiable" title="<?= e($checkedAt) ?>">adresse non vérifiable</div>
+                            <?php endif; ?>
                         </a>
                     </td>
                     <td class="row-cell"><a class="row-link" href="<?= $editUrl ?>" tabindex="-1"><?= (int)$list['subscriber_count'] ?></a></td>

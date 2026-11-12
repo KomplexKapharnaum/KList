@@ -132,18 +132,19 @@ class Database {
     }
 
     private function runMigrations(): void {
-        // Check if last_used column exists in listes table
-        $columns = $this->pdo->query("PRAGMA table_info(listes)")->fetchAll();
-        $hasLastUsed = false;
-        foreach ($columns as $col) {
-            if ($col['name'] === 'last_used') {
-                $hasLastUsed = true;
-                break;
+        // Columns added to listes after its first release: add whichever is absent.
+        // address_*: does the mail host know the list's address (AddressCheck, #t-077).
+        $have = array_column($this->pdo->query("PRAGMA table_info(listes)")->fetchAll(), 'name');
+        $added = [
+            'last_used' => 'DATETIME',
+            'address_check' => 'TEXT',          // ok | missing | unverifiable
+            'address_missing' => 'TEXT',        // the refused address(es), comma-separated
+            'address_checked_at' => 'DATETIME',
+        ];
+        foreach ($added as $column => $type) {
+            if (!in_array($column, $have, true)) {
+                $this->pdo->exec("ALTER TABLE listes ADD COLUMN $column $type");
             }
-        }
-        
-        if (!$hasLastUsed) {
-            $this->pdo->exec("ALTER TABLE listes ADD COLUMN last_used DATETIME");
         }
     }
 

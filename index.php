@@ -283,6 +283,26 @@ function handleLogout(): void {
 function handleDashboard(): void {
     $listManager = new ListManager();
     $db = Database::getInstance();
+
+    // « Vérifier les adresses »: ask the mail host about every list now (#t-077).
+    if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['check_addresses'])) {
+        if (verify_csrf($_POST['csrf_token'] ?? '')) {
+            $verdicts = $listManager->checkAddresses();
+            $missing = count(array_filter($verdicts, fn($v) => $v[0] === AddressCheck::MISSING));
+            $unsure = count(array_filter($verdicts, fn($v) => $v[0] === AddressCheck::UNVERIFIABLE));
+            if ($missing) {
+                flash('error', "$missing liste(s) dont l'adresse n'existe pas chez l'hébergeur mail (en rouge).");
+            } elseif ($unsure) {
+                flash('warning', "Serveur mail non joignable : $unsure liste(s) non vérifiable(s).");
+            } else {
+                flash('success', 'Toutes les adresses de listes existent chez l\'hébergeur mail.');
+            }
+        } else {
+            flash('error', 'Token CSRF invalide.');
+        }
+        header('Location: ' . url('?page=dashboard'));
+        exit;
+    }
     $lists = $listManager->getAll(); // Get full list data including last_used
     
     // Get last cron run time
@@ -406,8 +426,14 @@ function handleListEdit(ListManager $listManager, ?array $list): void {
             }
 
             if ($result['success']) {
-                flash('success', $list ? 'Liste mise à jour.' : 'Liste créée.');
                 $name = strtolower($formData['nom']);
+                $verdict = $listManager->checkAddresses($name)[$name] ?? null;
+                if ($verdict && $verdict[0] === AddressCheck::MISSING) {
+                    flash('error', ($list ? 'Liste mise à jour' : 'Liste créée') . ', mais ' . e(implode(', ', $verdict[1]))
+                        . " n'existe pas chez l'hébergeur mail : ajoutez l'alias vers " . e(setting('imap_user', '')) . '.');
+                } else {
+                    flash('success', $list ? 'Liste mise à jour.' : 'Liste créée.');
+                }
                 header('Location: ' . url('?page=list&action=edit&name=' . urlencode($name)));
                 exit;
             } else {

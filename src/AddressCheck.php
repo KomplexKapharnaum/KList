@@ -103,6 +103,29 @@ class AddressCheck
         return $result;
     }
 
+    /**
+     * One list's verdict from the per-address results of all its addresses (one per domain):
+     * any missing → missing, naming them; else any not ok → unverifiable; else ok.
+     * @return array{0:string,1:string[]} [status, missing addresses]
+     */
+    public static function verdict(array $results, array $addresses): array
+    {
+        $missing = [];
+        $unsure = !$addresses;
+        foreach ($addresses as $address) {
+            $answer = $results[$address] ?? self::UNVERIFIABLE;
+            if ($answer === self::MISSING) {
+                $missing[] = $address;
+            } elseif ($answer !== self::OK) {
+                $unsure = true;
+            }
+        }
+        if ($missing) {
+            return [self::MISSING, $missing];
+        }
+        return [$unsure ? self::UNVERIFIABLE : self::OK, []];
+    }
+
     /** One RCPT reply → ok|missing|unverifiable (see the class header). */
     public static function classify(string $reply): string
     {

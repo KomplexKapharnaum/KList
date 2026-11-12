@@ -198,7 +198,22 @@ try {
     echo '<div class="section">';
     echo '<h2 class="section-title">📋 Processing Log</h2>';
     echo '<div class="log-container">';
-    
+
+    // Once a day: does the mail host still know every list's address? (#t-077) Marked done
+    // before it runs, so a host that hangs costs one run a day, not every run.
+    if ($db->getSetting('last_address_check', '') !== date('Y-m-d')) {
+        $db->setSetting('last_address_check', date('Y-m-d'));
+        try {
+            $verdicts = (new ListManager())->checkAddresses();
+            $missing = array_keys(array_filter($verdicts, fn($v) => $v[0] === AddressCheck::MISSING));
+            echo '<div>🔎 Address check: ' . count($verdicts) . ' list(s)'
+                . ($missing ? ', <span style="color: #f44336;">unknown to the mail host: ' . htmlspecialchars(implode(', ', $missing)) . '</span>' : '')
+                . '</div>';
+        } catch (Throwable $e) {
+            echo '<div style="color: #ff9800;">⚠️ Address check failed: ' . htmlspecialchars($e->getMessage()) . '</div>';
+        }
+    }
+
     $processor = new MailProcessor();
     
     if (!$processor->connect()) {

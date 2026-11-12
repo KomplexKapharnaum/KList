@@ -91,7 +91,8 @@ check('getAllLabels() returns subscriber_count', 1, preg_match('/\bas subscriber
 
 function url($p) { return $p; }
 function asset($p) { return $p; }
-function setting($k, $d = null) { return $k === 'domains' ? 'kxkm.net' : $d; }
+function setting($k, $d = null) { return array('domains' => 'kxkm.net', 'imap_user' => 'listes@kxkm.net')[$k] ?? $d; }
+function csrf_token() { return 'tok'; }
 function e($s) { return htmlspecialchars((string) $s, ENT_QUOTES, 'UTF-8'); }
 
 $warnings = array();
@@ -135,6 +136,34 @@ foreach (array('atelier', 'bar') as $i => $name) {
     check("dashboard $name: one tab stop besides Modifier", 3, substr_count($row, 'tabindex="-1"'));
     check("dashboard $name: Modifier stays", 1, preg_match('#href="\?page=list&action=edit&name=' . $name . '"\s+class="btn btn-sm btn-secondary"#', $row));
 }
+check('dashboard: never checked → no address line', 0, preg_match('~address-(missing|unverifiable)~', $html));
+check('dashboard: the Vérifier button posts with the token', 1,
+    preg_match('~name="csrf_token" value="tok">\s*<button type="submit" name="check_addresses"~', $html));
+
+// --- dashboard: a list the mail host does not know is red, an unverifiable one grey (#t-077 ④) ------
+$warnings = array();
+set_error_handler(function ($no, $str) use (&$warnings) { $warnings[] = $str; return true; });
+$lists = array(
+    array('id' => 1, 'nom' => 'atelier', 'subscriber_count' => 7, 'last_used' => null, 'active' => 1, 'moderation' => 0,
+        'address_check' => 'missing', 'address_missing' => 'atelier@kxkm.net', 'address_checked_at' => '2026-11-12 08:00:00'),
+    array('id' => 2, 'nom' => 'bar', 'subscriber_count' => 3, 'last_used' => null, 'active' => 1, 'moderation' => 0,
+        'address_check' => 'unverifiable', 'address_missing' => '', 'address_checked_at' => '2026-11-12 08:00:00'),
+    array('id' => 3, 'nom' => 'cafe', 'subscriber_count' => 3, 'last_used' => null, 'active' => 1, 'moderation' => 0,
+        'address_check' => 'ok', 'address_missing' => '', 'address_checked_at' => '2026-11-12 08:00:00'),
+);
+ob_start();
+include ROOT_PATH . '/templates/dashboard.php';
+$html = ob_get_clean();
+restore_error_handler();
+check('address: no warning', array(), $warnings);
+preg_match_all('#<tr class="row-clickable([^"]*)">(.*?)</tr>#s', $html, $rows);
+check('address: only the missing row is red', array(' row-address-missing', '', ''), $rows[1]);
+check('address: the red line names the address and the alias to add', 1, preg_match(
+    "~class=\"address-missing\" title=\"vérifié le 12/11/2026 à 08:00\">\s*atelier@kxkm.net n'existe pas chez l'hébergeur mail : ajoutez l'alias vers listes@kxkm.net~",
+    $rows[2][0] ?? ''));
+check('address: unverifiable is grey, never red', array(0, 1), array(
+    preg_match('~address-missing~', $rows[2][1] ?? ''), preg_match('~class="address-unverifiable"~', $rows[2][1] ?? '')));
+check('address: ok says nothing', 0, preg_match('~address-~', $rows[2][2] ?? ''));
 
 // --- Refusés: the reason, in dispatch()'s order ----------------------------------------------------
 $open = array('nom' => 'atelier', 'active' => 1, 'moderation' => 0);

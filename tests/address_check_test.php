@@ -128,7 +128,107 @@ check('classify bare 554', 'unverifiable', AddressCheck::classify("554 Rejected\
 check('classify 421', 'unverifiable', AddressCheck::classify("421 4.3.2 Shutting down\r\n"));
 check('classify empty', 'unverifiable', AddressCheck::classify(''));
 
-// 10. Nothing to ask: no connection opened.
+// 10. verdict(): one list across its domains.
+check('verdict ok', ['ok', []], AddressCheck::verdict(['a@x' => 'ok', 'a@y' => 'ok'], ['a@x', 'a@y']));
+check('verdict missing names it', ['missing', ['a@y']], AddressCheck::verdict(['a@x' => 'unverifiable', 'a@y' => 'missing'], ['a@x', 'a@y']));
+check('verdict unverifiable', ['unverifiable', []], AddressCheck::verdict(['a@x' => 'ok', 'a@y' => 'unverifiable'], ['a@x', 'a@y']));
+check('verdict unasked → unverifiable', ['unverifiable', []], AddressCheck::verdict([], ['a@x']));
+check('verdict no address → unverifiable', ['unverifiable', []], AddressCheck::verdict([], []));
+
+// 11. ListManager::checkAddresses(): one session per domain, the verdict and its date stored per list.
+require_once ROOT_PATH . '/src/Database.php';
+require_once ROOT_PATH . '/src/ListManager.php';
+
+class FakeDatabase extends Database
+{
+    public $settings = ['domains' => 'kxkm.net, lists.kxkm.net', 'imap_user' => BOX];
+    public $lists = [['id' => 1, 'nom' => 'equipe'], ['id' => 2, 'nom' => 'ghost']];
+    public $writes = [];
+
+    public function __construct()
+    {
+    }
+
+    public function getSetting(string $key, $default = null): ?string
+    {
+        return $this->settings[$key] ?? $default;
+    }
+
+    public function fetchAll(string $sql, array $params = []): array
+    {
+        return $this->lists;
+    }
+
+    public function fetchOne(string $sql, array $params = []): ?array
+    {
+        foreach ($this->lists as $l) {
+            if ($l['nom'] === $params[0]) {
+                return $l;
+            }
+        }
+        return null;
+    }
+
+    public function execute(string $sql, array $params = []): int
+    {
+        $this->writes[] = [$sql, $params];
+        return 1;
+    }
+}
+
+/** Answers from a table, records each session. */
+class TableCheck extends AddressCheck
+{
+    public $answers = [];
+    public $sessions = [];
+
+    public function check(string $domain, array $addresses, string $mailbox): array
+    {
+        $this->sessions[] = [$domain, $addresses, $mailbox];
+        $out = [];
+        foreach ($addresses as $a) {
+            $out[$a] = $this->answers[$a] ?? 'ok';
+        }
+        return $out;
+    }
+}
+
+function manager(FakeDatabase $db)
+{
+    $lm = (new ReflectionClass('ListManager'))->newInstanceWithoutConstructor();
+    $p = new ReflectionProperty('ListManager', 'db');
+    $p->setAccessible(true);
+    $p->setValue($lm, $db);
+    return $lm;
+}
+
+$db = new FakeDatabase();
+$tc = new TableCheck();
+$tc->answers = ['ghost@lists.kxkm.net' => 'missing'];
+$v = manager($db)->checkAddresses(null, $tc);
+check('manager: one session per domain, every list in each', [
+    ['kxkm.net', ['equipe@kxkm.net', 'ghost@kxkm.net'], BOX],
+    ['lists.kxkm.net', ['equipe@lists.kxkm.net', 'ghost@lists.kxkm.net'], BOX],
+], $tc->sessions);
+check('manager: verdicts', ['equipe' => ['ok', []], 'ghost' => ['missing', ['ghost@lists.kxkm.net']]], $v);
+check('manager: one UPDATE per list', 2, count($db->writes));
+check('manager: stored status, missing, then id', ['missing', 'ghost@lists.kxkm.net', 2],
+    [$db->writes[1][1][0], $db->writes[1][1][1], $db->writes[1][1][3]]);
+check('manager: date stored', 1, preg_match('/^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d$/', $db->writes[1][1][2]));
+check('manager: the UPDATE sets the three columns', 1,
+    preg_match('/UPDATE listes SET address_check = \?, address_missing = \?, address_checked_at = \? WHERE id = \?/', $db->writes[0][0]));
+
+$db = new FakeDatabase();
+$tc = new TableCheck();
+check('manager: one list by name', ['equipe' => ['ok', []]], manager($db)->checkAddresses('Equipe', $tc));
+check('manager: one list → only its addresses asked', [['kxkm.net', ['equipe@kxkm.net'], BOX], ['lists.kxkm.net', ['equipe@lists.kxkm.net'], BOX]], $tc->sessions);
+
+$db = new FakeDatabase();
+$db->settings['imap_user'] = '';
+$tc = new TableCheck();
+check('manager: no mailbox → nothing asked, nothing stored', [[], [], []], [manager($db)->checkAddresses(null, $tc), $tc->sessions, $db->writes]);
+
+// 12. Nothing to ask: no connection opened.
 $ac = new ScriptedCheck();
 check('empty list → empty result', [], $ac->check('kxkm.net', [], BOX));
 check('empty list → no connect', [], $ac->asked);
