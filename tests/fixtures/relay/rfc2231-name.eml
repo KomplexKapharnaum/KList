@@ -1,0 +1,21 @@
+From: alice@example.org
+To: equipe@kxkm.net, tous@kxkm.net
+Subject: =?ISO-8859-1?Q?Programme_de_l'=E9t=E9?=
+Date: Thu, 12 Nov 2026 09:00:00 +0100
+Message-ID: <programme-ete@example.org>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="mix-b"
+
+--mix-b
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: quoted-printable
+
+Le programme est en pi=C3=A8ce jointe.
+--mix-b
+Content-Type: application/pdf
+Content-Disposition: attachment;
+ filename*=UTF-8''programme%20%C3%A9t%C3%A9%202026.pdf
+Content-Transfer-Encoding: base64
+
+JVBERi0xLjQKJcOkw7zDtsOfCg==
+--mix-b--

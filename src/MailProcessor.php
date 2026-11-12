@@ -2,8 +2,9 @@
 /**
  * MailProcessor - Email processing for mailing lists
  * 
- * IMPORTANT: This file preserves the exact logic from the original Listeproc.php
+ * IMPORTANT: dispatch() preserves the exact logic from the original Listeproc.php
  * DO NOT modify the dispatch() or forward() logic without explicit user approval.
+ * forward() relays the original message since 2026-11-12 (approved: "relay, don't rebuild").
  */
 
 declare(strict_types=1);
@@ -15,6 +16,8 @@ require_once $libPath . '/Fetch/Message.php';
 require_once $libPath . '/Fetch/Server.php';
 require_once $libPath . '/Fetch/MIME.php';
 require_once $libPath . '/Fetch/Attachment.php';
+require_once __DIR__ . '/ListRelay.php';
+require_once __DIR__ . '/RelayJournal.php';
 
 use Fetch\Server;
 use Fetch\Message;
@@ -23,6 +26,7 @@ class MailProcessor {
     public Database $db;
     private ListManager $listManager;
     private BlocklistManager $blocklistManager;
+    private RelayJournal $journal;
     
     // Settings loaded from database
     private string $mailbox;
@@ -71,6 +75,7 @@ class MailProcessor {
         $this->db = Database::getInstance();
         $this->listManager = new ListManager();
         $this->blocklistManager = new BlocklistManager();
+        $this->journal = new RelayJournal($this->db->getPdo());
         
         // Load settings from database
         $this->loadSettings();
@@ -885,10 +890,13 @@ class MailProcessor {
     }
 
     /**
-     * FORWARD - Send approved messages to subscribers
-     * =====================================================
-     * PRESERVED FROM ORIGINAL - DO NOT MODIFY WITHOUT APPROVAL
-     * =====================================================
+     * FORWARD - relay an approved message to each list it names
+     *
+     * Each list gets the ORIGINAL message, headers rewritten and body untouched (ListRelay; decided
+     * 2026-11-12, "relay, don't rebuild"), sent to its own envelope: the list's subscribers minus
+     * the sender, whoever the original To/Cc reached, the blocklist, and anyone another list of the
+     * same message already tried. The journal records each list as it goes out; the message moves
+     * to DONE only once every active list it names is sent, and a retry skips what already went.
      */
     private function forward($msg): void {
         $forwardStartTime = microtime(true);
@@ -909,215 +917,186 @@ class MailProcessor {
             return;
         }
         
-        $matchStartTime = microtime(true);
         $matchedListes = $this->matchListes($msg);
-        $matchTime = round(microtime(true) - $matchStartTime, 3);
-        $this->log('debug', '🔍 matchListes completed', ['time' => $matchTime . 's', 'found' => count($matchedListes)]);
-        
         if (empty($matchedListes)) {
             $this->log('warning', '⚠️ No matching list for approved message, moving to OTHERS');
             $this->moveToMailBox($msg, 'OTHERS');
             return;
         }
-        
-        $listCount = 0;
+
+        $raw = $msg->getRawMessage();
+        $key = ListRelay::messageKey($raw);
+        $sender = strtolower($from['address']);
+        $original = ListRelay::originalRecipients($raw);
+        $own = array_merge(array_keys($this->listes), [strtolower($this->username)]);
+
+        $active = 0;
+        $complete = true;
+        $done = [];
         foreach ($matchedListes as $liste) {
-            $listCount++;
-            $listStartTime = microtime(true);
-            $this->log('debug', '📋 Processing list ' . $listCount . '/' . count($matchedListes) . ': ' . $liste['nom'], ['list' => $liste['nom']]);
-            
+            if (isset($done[$liste['nom']])) {
+                continue;   // the same list named on two of its domains
+            }
+            $done[$liste['nom']] = true;
+
             if (!$liste['active']) {
                 $this->log('debug', '⏸️ Skipping inactive list', ['list' => $liste['nom']]);
                 continue;
             }
-            
+            $active++;
+
+            if ($this->journal->isSent($key, $liste['nom'])) {
+                $this->log('info', '↪️ Already sent to this list, skipped', ['list' => $liste['nom'], 'message' => $key]);
+                continue;
+            }
+
             try {
-                $buildStartTime = microtime(true);
-                $mail = $this->mail();
+                [$rcpts, $skipped] = ListRelay::recipients(
+                    $liste['abonnes'], $sender, $original, $this->blocklist, $this->journal->reached($key), $own
+                );
+                $copy = ListRelay::copy($raw, $liste['nom'], $liste['email'], (bool) $liste['reponse']);
+                $this->log('info', '📧 Relaying message to list: ' . $liste['email'], [
+                    'list' => $liste['email'],
+                    'recipients' => count($rcpts),
+                    'skipped' => array_count_values($skipped),
+                ]);
 
-                // WATERMARK (to handle round back)
-                $mail->addCustomHeader('X-list-relay', $liste['email']);
-
-                // FROM (liste)
-                $mail->setFrom($liste['email'], ucfirst($liste['nom']) . ' ' . strtoupper(explode('.', $this->domains[0] ?? 'MAIL')[0]));
-
-                // REPLY (to original sender)
-                $namefrom = '';
-                if (isset($msg->getAddresses('from')['name'])) {
-                    $namefrom = $msg->getAddresses('from')['name'];
-                }
-                $mail->AddReplyTo($msg->getAddresses('from')['address'], $namefrom);
-
-                // DEST - filter blocked emails
-                $cc = [];
-                foreach ($liste['abonnes'] as $to) {
-                    if (!isset($this->blocklist[$to])) {
-                        $cc[] = $to;
-                    } else {
-                        $this->stats['blocked']++;
-                        $this->log('debug', '🚫 Recipient blocked: ' . $to, ['email' => $to]);
-                    }
-                }
-
-                // Liste Discussion : expose destinataires
-                if ($liste['reponse']) {
-                    foreach ($cc as $to) {
-                        $mail->addAddress($to);
-                    }
-                }
-                // Liste de Diffusion : hide destinataires (expose liste to handle reply-to-all)
-                else {
-                    $mail->addAddress($liste['email'], ucfirst($liste['nom']) . ' ' . strtoupper(explode('.', $this->domains[0] ?? 'MAIL')[0]));
-                    foreach ($cc as $to) {
-                        $mail->addBCC($to);
-                    }
-                }
-
-                // SUBJECT
-                $subject = explode($liste['nom'] . '] ', $msg->getSubject());
-                $subject = end($subject);
-                $mail->Subject = '[' . $namefrom . ' sur ' . $liste['nom'] . '] ' . $subject;
-
-                // SENDER info
-                $sender = 'Message envoyé par: ' . $msg->getAddresses('from')['name'] . ' ' . $msg->getAddresses('from')['address'];
-
-                // UNSUBSCRIBE link
-                $unsub = 'Pour vous désabonner de cette liste,
-                    <a href="mailto:' . $liste['email'] . '?subject=STOP"> envoyez lui un mail </a>
-                    avec STOP comme sujet.';
-
-                // BODY
-                $bodyHTML = $msg->getMessageBody(true);
-                $bodyNOHTML = $msg->getMessageBody(false);
-                $mail->msgHTML('<small><em>' . $sender . '</em></small><br /><br />' . $bodyHTML . '<br /><br /><small><em>' . $unsub . '</em></small>');
-                $mail->AltBody = $sender . '\n\n' . $bodyNOHTML . '\n\n' . $unsub;
-
-                // ATTACHMENT - with size limit to prevent memory exhaustion
-                $attachStartTime = microtime(true);
-                $attach = $msg->getAttachments();
-                $maxAttachmentSize = 10 * 1024 * 1024; // 10MB per attachment
-                $maxTotalSize = 25 * 1024 * 1024; // 25MB total
-                $totalAttachSize = 0;
-                $skippedAttachments = 0;
-                
-                if (is_array($attach) && count($attach) > 0) {
-                    foreach ($attach as $key => $piece) {
-                        try {
-                            // Check memory before processing
-                            $memoryUsed = memory_get_usage(true);
-                            $memoryLimit = $this->getMemoryLimitBytes();
-                            $memoryAvailable = $memoryLimit - $memoryUsed;
-                            
-                            // Need at least 50MB free for safe processing
-                            if ($memoryAvailable < 50 * 1024 * 1024) {
-                                $this->log('warning', '⚠️ Low memory, skipping remaining attachments', [
-                                    'used' => round($memoryUsed / 1024 / 1024, 1) . 'MB',
-                                    'available' => round($memoryAvailable / 1024 / 1024, 1) . 'MB'
-                                ]);
-                                $skippedAttachments++;
-                                continue;
-                            }
-                            
-                            $piece->saveToDirectory(ROOT_PATH . '/tmp/');
-                            $filePath = ROOT_PATH . '/tmp/' . $piece->getFileName();
-                            
-                            if (file_exists($filePath)) {
-                                $fileSize = filesize($filePath);
-                                
-                                // Check individual file size
-                                if ($fileSize > $maxAttachmentSize) {
-                                    $this->log('warning', '⚠️ Attachment too large, skipping', [
-                                        'file' => $piece->getFileName(),
-                                        'size' => round($fileSize / 1024 / 1024, 2) . 'MB',
-                                        'max' => round($maxAttachmentSize / 1024 / 1024, 2) . 'MB'
-                                    ]);
-                                    unlink($filePath);
-                                    $skippedAttachments++;
-                                    continue;
-                                }
-                                
-                                // Check total size
-                                if ($totalAttachSize + $fileSize > $maxTotalSize) {
-                                    $this->log('warning', '⚠️ Total attachment size exceeded, skipping', [
-                                        'file' => $piece->getFileName(),
-                                        'total' => round($totalAttachSize / 1024 / 1024, 2) . 'MB',
-                                        'max' => round($maxTotalSize / 1024 / 1024, 2) . 'MB'
-                                    ]);
-                                    unlink($filePath);
-                                    $skippedAttachments++;
-                                    continue;
-                                }
-                                
-                                $mail->addAttachment($filePath);
-                                $totalAttachSize += $fileSize;
-                            }
-                        } catch (Exception $e) {
-                            $this->log('warning', '⚠️ Error processing attachment: ' . $e->getMessage());
-                            $skippedAttachments++;
-                        }
-                    }
-                    $attachTime = round(microtime(true) - $attachStartTime, 3);
-                    $this->log('debug', '📎 Attachments processed', [
-                        'count' => count($attach) - $skippedAttachments,
-                        'skipped' => $skippedAttachments,
-                        'total_size' => round($totalAttachSize / 1024 / 1024, 2) . 'MB',
-                        'time' => $attachTime . 's'
-                    ]);
-                }
-                
-                $buildTime = round(microtime(true) - $buildStartTime, 3);
-                $this->log('debug', '📝 Email built', ['time' => $buildTime . 's', 'attachments' => is_array($attach) ? count($attach) : 0]);
-
-                // SEND
-                $sendStartTime = microtime(true);
-                $this->log('info', '📧 Sending message to list: ' . $liste['email'], ['list' => $liste['email'], 'recipients' => count($cc)]);
-                
-                if (!$this->sendMailWithRetry($mail, 'forward to ' . $liste['email'])) {
-                    // Don't move to DONE if send failed - will retry next run
+                $error = '';
+                $outcome = $this->relayWithRetry($copy, $rcpts, 'relay to ' . $liste['email'], $error);
+                if ($outcome === null) {
+                    $this->journal->markFailed($key, $liste['nom'], $error);
+                    $complete = false;
                     $this->log('error', '❌ Message not sent, keeping in APPROVED for retry', ['list' => $liste['email']]);
                     continue;
                 }
-                
-                $sendTime = round(microtime(true) - $sendStartTime, 3);
-                $this->stats['sent_messages']++;
-                $this->stats['sent_emails'] += count($cc);
-                $this->log('success', '✅ Message sent successfully to ' . count($cc) . ' recipient(s)', [
-                    'list' => $liste['email'],
-                    'recipients' => count($cc),
-                    'send_time' => $sendTime . 's',
-                    'sample' => array_slice($cc, 0, 3)
-                ]);
-                
-                // Mark list as used (update last_used timestamp)
-                $this->listManager->markAsUsedByName($liste['nom']);
-                
-                $this->moveToMailBox($msg, 'DONE');
 
-                // CLEAR TEMP after each message
-                $this->clearTemp();
-                
-                $listTime = round(microtime(true) - $listStartTime, 3);
-                $this->log('debug', '✓ List processing complete', ['list' => $liste['nom'], 'total_time' => $listTime . 's']);
-                
-            } catch (Exception $e) {
-                $this->stats['errors']++;
-                $this->log('error', '❌ Error during list forward: ' . $e->getMessage(), [
-                    'list' => $liste['nom'],
-                    'error' => $e->getMessage(),
-                    'trace' => substr($e->getTraceAsString(), 0, 500)
+                [$accepted, $refused] = $outcome;
+                $this->journal->markSent($key, $liste['nom'], $accepted, array_map(
+                    fn($r) => trim($r['code'] . ' ' . $r['code_ex'] . ' ' . $r['detail']), $refused
+                ));
+                $this->stats['sent_messages']++;
+                $this->stats['sent_emails'] += count($accepted);
+                $this->log('success', '✅ Message relayed to ' . count($accepted) . ' recipient(s)', [
+                    'list' => $liste['email'],
+                    'recipients' => count($accepted),
+                    'refused' => count($refused),
+                    'sample' => array_slice($accepted, 0, 3)
                 ]);
-            } catch (\Error $e) {
+                $this->listManager->markAsUsedByName($liste['nom']);
+            } catch (\Throwable $e) {
+                $complete = false;
                 $this->stats['errors']++;
-                $this->log('error', '❌ Fatal error during list forward: ' . $e->getMessage(), [
+                $this->log('error', '❌ Error during list relay: ' . $e->getMessage(), [
                     'list' => $liste['nom'],
                     'error' => $e->getMessage(),
                     'trace' => substr($e->getTraceAsString(), 0, 500)
                 ]);
             }
         }
-        
+
+        if ($active === 0) {
+            $this->log('warning', '⏸️ Every list this message names is inactive, keeping it in APPROVED', ['message' => $key]);
+        } elseif ($complete) {
+            $this->moveToMailBox($msg, 'DONE');
+        }
+
         $forwardTime = round(microtime(true) - $forwardStartTime, 3);
-        $this->log('debug', '✓ Forward complete', ['total_time' => $forwardTime . 's', 'lists_processed' => $listCount]);
+        $this->log('debug', '✓ Forward complete', ['total_time' => $forwardTime . 's', 'lists' => count($done), 'complete' => $complete]);
+    }
+
+    /**
+     * Send one list copy, as is, to these recipients: up to maxSendRetries attempts, each a whole
+     * SMTP transaction. Returns [accepted, refused] once the provider took it — or once every
+     * recipient was refused for good (5xx: nothing a resend would change) — and null when it did
+     * not go out ($error says why). Refusals are never a reason to send again (#t-071).
+     *
+     * @return array{0: string[], 1: array<string,array{code:int,code_ex:string,detail:string}>}|null
+     */
+    private function relayWithRetry(string $copy, array $rcpts, string $context, string &$error = ''): ?array {
+        if (empty($rcpts)) {
+            return [[], []];
+        }
+        for ($attempt = 1; $attempt <= $this->maxSendRetries; $attempt++) {
+            $outcome = $this->relayOnce($copy, $rcpts, $error);
+            if ($outcome !== null) {
+                if (!empty($outcome[1])) {
+                    $this->recipientsRefused($outcome[1], $context);
+                }
+                return $outcome;
+            }
+            if ($attempt < $this->maxSendRetries) {
+                $this->log('warning', '⚠️ Relay failed (attempt ' . $attempt . '/' . $this->maxSendRetries . '), retrying...', [
+                    'error' => $error,
+                    'context' => $context
+                ]);
+                usleep((int)($this->retryDelay * 1000000));
+            }
+        }
+        $this->stats['errors']++;
+        $this->log('error', '❌ Failed to relay after ' . $this->maxSendRetries . ' attempts', [
+            'error' => $error,
+            'context' => $context
+        ]);
+        return null;
+    }
+
+    /** One SMTP transaction on the shared connection: MAIL FROM the mailbox, one RCPT each, DATA. */
+    private function relayOnce(string $copy, array $rcpts, string &$error): ?array {
+        $mail = $this->getSmtpConnection();
+        $smtp = $mail->getSMTPInstance();
+        try {
+            if (!$mail->smtpConnect()) {
+                $error = 'SMTP connect failed';
+                return null;
+            }
+        } catch (\Exception $e) {
+            $error = 'SMTP connect failed: ' . $e->getMessage();
+            return null;
+        }
+        if ($smtp instanceof TrackingSMTP) {
+            $smtp->clearOutcome();
+        }
+
+        if (!$smtp->mail($this->username)) {
+            $error = 'MAIL FROM refused: ' . implode(' ', $smtp->getError());
+            $smtp->reset() || $smtp->close();
+            return null;
+        }
+        $accepted = [];
+        $refused = [];
+        foreach ($rcpts as $address) {
+            if ($smtp->recipient($address)) {
+                $accepted[] = $address;
+            } else {
+                $e = $smtp->getError();
+                $refused[$address] = [
+                    'code' => (int) $e['smtp_code'],
+                    'code_ex' => (string) $e['smtp_code_ex'],
+                    'detail' => trim((string) $e['detail']),
+                ];
+            }
+        }
+
+        if (empty($accepted)) {
+            $smtp->reset() || $smtp->close();
+            foreach ($refused as $r) {
+                if ($r['code'] < 500) {
+                    $error = 'every recipient refused, some for now';
+                    return null;
+                }
+            }
+            return [[], $refused];
+        }
+
+        // SMTP::data() ends the last line itself: one trailing line end less keeps the bytes as they were.
+        $data = str_ends_with($copy, "\r\n") ? substr($copy, 0, -2) : rtrim($copy, "\n");
+        if (!$smtp->data($data)) {
+            $error = 'DATA refused: ' . implode(' ', $smtp->getError());
+            $smtp->reset() || $smtp->close();
+            return null;
+        }
+        $smtp->reset() || $smtp->close();
+        return [$accepted, $refused];
     }
 
     /**

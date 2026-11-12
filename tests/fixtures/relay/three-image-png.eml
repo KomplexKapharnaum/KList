@@ -1,0 +1,36 @@
+From: Bob <bob@example.net>
+Reply-To: Bob Perso <bob.perso@example.net>
+Sender: bob-lists@example.net
+To: affiches@kxkm.net
+Subject: [Bob sur affiches] Les affiches
+Date: Thu, 12 Nov 2026 10:00:00 +0100
+Message-ID: <affiches-3@example.net>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="png-b"
+
+--png-b
+Content-Type: text/plain; charset=UTF-8
+
+Trois versions, toutes appelées image.png.
+--png-b
+Content-Type: image/png; name="image.png"
+Content-Disposition: inline; filename="image.png"
+Content-Transfer-Encoding: base64
+Content-ID: <a1@example.net>
+
+AQID
+--png-b
+Content-Type: image/png; name="image.png"
+Content-Disposition: inline; filename="image.png"
+Content-Transfer-Encoding: base64
+Content-ID: <a2@example.net>
+
+BAUG
+--png-b
+Content-Type: image/png; name="image.png"
+Content-Disposition: inline; filename="image.png"
+Content-Transfer-Encoding: base64
+Content-ID: <a3@example.net>
+
+BwgJ
+--png-b--

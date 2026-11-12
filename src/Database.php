@@ -5,6 +5,8 @@
 
 declare(strict_types=1);
 
+require_once __DIR__ . '/RelayJournal.php';
+
 class Database {
     private static ?Database $instance = null;
     private PDO $pdo;
@@ -115,6 +117,9 @@ class Database {
             )
         ");
 
+        // What went out for each message, per list (ListRelay, #t-072)
+        RelayJournal::createTable($pdo);
+
         // Create indexes
         $pdo->exec("CREATE INDEX IF NOT EXISTS idx_subscribers_liste ON subscribers(liste_id)");
         $pdo->exec("CREATE INDEX IF NOT EXISTS idx_subscribers_email ON subscribers(email)");
@@ -146,6 +151,9 @@ class Database {
                 $this->pdo->exec("ALTER TABLE listes ADD COLUMN $column $type");
             }
         }
+
+        // Tables added after the first release
+        RelayJournal::createTable($this->pdo);
     }
 
     // Settings methods

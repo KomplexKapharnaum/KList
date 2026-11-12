@@ -65,7 +65,8 @@ This tool runs on any standard PHP web hosting and relies on a **dedicated IMAP 
 - **👥 Subscriber management** - Add, remove, search, and export subscribers
 - **🛡️ Moderation** - Optional moderation for each list before forwarding
 - **🚫 Blocklist** - Automatic blocking of bouncing emails
-- **📧 Discussion lists** - Reply-to-all mode (expose recipients) or broadcast mode (BCC)
+- **📧 Discussion lists** - Replies go to the list (discussion) or to the sender (broadcast); subscribers' addresses are never shown
+- **📎 The original message, untouched** - Inline images, attachments and encodings reach subscribers exactly as sent
 - **🔍 Subscriber search** - Find subscribers across all lists with partial matching
 - **⚡ Live search** - Real-time filtering as you type
 - **📊 Dashboard** - Overview with cron status, subscriber counts, and last activity
@@ -160,7 +161,7 @@ The cron job processes incoming emails and forwards approved messages.
 2. Enter a **name** (lowercase, no spaces - becomes the email prefix)
 3. Configure options:
    - **Modération** - Require approval before forwarding
-   - **Liste de Discussion** - Recipients see each other (reply-to-all works)
+   - **Liste de Discussion** - Replies go to the list (otherwise to the sender)
    - **Active** - Enable/disable the list
 4. Add subscribers (one per line, or comma/semicolon separated)
 
@@ -196,6 +197,24 @@ The cron job processes incoming emails and forwards approved messages.
 - `ERRORS` - Bounce messages / errors
 - `ARCHIVE` - Round-back prevention
 - `OTHERS` - No matching list
+
+### What subscribers receive
+
+Each list gets the **original message**, body byte for byte (inline images, attachments, encodings
+untouched), with only its headers rewritten:
+
+- `From: "Alice via mylist" <mylist@yourdomain.com>` (the sender's name, else their address) — the
+  server cannot send as the sender's own address (DMARC); `X-Original-From` keeps it
+- `Reply-To:` the list on a discussion list, the sender on a broadcast list
+- `Subject:` `[mylist]` once, after any `Re:`
+- `To`/`Cc` as the sender wrote them; subscribers are only in the envelope, never in the headers
+- `List-Id`, `List-Post`, `List-Unsubscribe`, `Precedence: list`, `X-Loop`; the sender's
+  `DKIM-Signature` is dropped (your provider signs the copy)
+
+Nobody gets two copies: the sender, whoever the original To/Cc already reached, and anyone another
+list of the same message reached are left out. Each list's send is recorded in the `relay_journal`
+table; a message moves to `DONE` once every list it names is sent, and a retry skips what went out.
+A recipient the server refuses is logged (and blocked if unknown), never a reason to send again.
 
 ### Unsubscribing
 
@@ -249,7 +268,7 @@ listes/
 │   ├── PHPMailer/      # Email sending
 │   └── Fetch/          # IMAP fetching
 │
-└── tmp/                # Temporary files (attachments)
+└── tmp/                # Temporary files (no longer used for sending)
     └── .htaccess       # Deny all access
 ```
 
@@ -288,7 +307,7 @@ listes/
 | **IMAP connection failed** | Verify credentials in Settings • Check IMAP is enabled on mail server • Try `mail.domain.com` vs `domain.com` • Ensure firewall allows port 993 |
 | **Cron not running** | Verify cron key in Settings → Cron Configuration • Test URL in browser • Check server cron logs |
 | **Emails not sending** | Check SMTP settings • Verify SPF/DKIM for sender email • Check ERRORS folder on IMAP |
-| **Memory exhausted** | Reduce `$maxMessagesPerRun` in `MailProcessor.php` • Large attachments (>10MB) auto-skipped • Increase PHP memory limit |
+| **Memory exhausted** | Reduce `$maxMessagesPerRun` in `MailProcessor.php` • Increase PHP memory limit |
 
 ## 📜 License
 
