@@ -621,8 +621,13 @@ class Message
     {
         static $known = null;
         if ($known === null) {
+            // mbstring's transfer encodings are not charsets, and any use of them —
+            // mb_encoding_aliases() included — is deprecated in PHP 8.5.
+            $notCharsets = array('base64', 'uuencode', 'html-entities', 'quoted-printable');
             $known = array();
             foreach (mb_list_encodings() as $name) {
+                if (in_array(strtolower($name), $notCharsets, true))
+                    continue;
                 $known[strtolower($name)] = true;
                 foreach (mb_encoding_aliases($name) as $alias)
                     $known[strtolower($alias)] = true;

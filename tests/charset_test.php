@@ -87,6 +87,9 @@ check('us-ascii lowercase', 'plain text', Message::convertCharset('plain text', 
 // a charset mbstring does not know: 7bit → US-ASCII, else UTF-8 (unchanged fallback)
 check('unknown charset, 8bit → read as UTF-8', 'Café', Message::convertCharset('Café', 'x-unknown', 1));
 check('unknown charset, 7bit → read as US-ASCII', 'Caf??', Message::convertCharset('Café', 'x-unknown', 0));
+// a transfer encoding named as the charset is no charset: unknown, and no PHP 8.5 deprecation
+check('quoted-printable as charset → unknown', 'Café', Message::convertCharset('Café', 'quoted-printable', 1));
+check('html-entities as charset → unknown', 'Café', Message::convertCharset('Café', 'HTML-ENTITIES', 1));
 
 if ($stubbed)
     check('the mbstring path ran', true, $mbCalls > 0);

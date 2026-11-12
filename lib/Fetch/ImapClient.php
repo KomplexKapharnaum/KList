@@ -497,7 +497,7 @@ class ImapClient
             }
         };
         foreach (preg_split('//u', (string) $name, -1, PREG_SPLIT_NO_EMPTY) as $ch) {
-            $o = ord($ch);
+            $o = ord($ch[0]);   // a whole UTF-8 char is deprecated input to ord() in PHP 8.5
             if (strlen($ch) === 1 && $o >= 0x20 && $o <= 0x7e) {
                 $flush();
                 $out .= ($ch === '&') ? '&-' : $ch;
