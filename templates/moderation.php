@@ -39,6 +39,9 @@ ob_start();
                         <div class="text-muted" style="font-size: 0.9rem;">
                             <span class="material-icons" style="font-size: 1rem; vertical-align: middle;">person</span>
                             <?= e($msg['from_name'] ? $msg['from_name'] . ' <' . $msg['from'] . '>' : $msg['from']) ?>
+                            <?php if (empty($msg['verified'])): ?>
+                            <span class="badge badge-warning" title="Le fournisseur n'a pas pu vérifier cette adresse (DMARC) : n'importe qui peut l'écrire.">non vérifiée</span>
+                            <?php endif; ?>
                         </div>
                         <div class="text-muted" style="font-size: 0.85rem;">
                             <span class="material-icons" style="font-size: 1rem; vertical-align: middle;">schedule</span>

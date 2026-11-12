@@ -198,6 +198,35 @@ The cron job processes incoming emails and forwards approved messages.
 - `ARCHIVE` - Round-back prevention
 - `OTHERS` - No matching list
 
+### Who may post
+
+A sender is trusted on your mail provider's own stamp, never on the `From:` header alone (anyone can
+write any `From:`). The **top** `Authentication-Results` header — the one your provider's MX added
+last — must be your provider's (`mx.infomaniak.com` by default; setting `authserv_id` otherwise) and
+say `dmarc=pass` for the sender's domain. Lower ones may come from the sender and are never read.
+
+- **A subscriber** (of any list without moderation) with a pass posts as before; **without a pass**
+  the message goes to `PENDING` for the moderator. A sender whose domain publishes no DMARC record
+  never passes, so their messages are moderated too.
+- **Someone outside the lists** may answer a thread: a message with a pass whose `In-Reply-To` or
+  `References` names a message the list relayed is relayed on a discussion list, and held in
+  `PENDING` on a broadcast list (or when it also names a list it is not a thread of). Otherwise it
+  is refused.
+- **Automatic mail** — `Auto-Submitted` other than `no`, `Precedence: bulk/junk/list`,
+  `X-Autoreply`, `X-Autorespond`, or our own `X-Loop` — goes to `OTHERS`, unanswered: out-of-office
+  replies never reach a list.
+- **Notices** ("envoi non autorisé", "liste inactive", "refusé par le modérateur") go only to a
+  sender the provider verified: a notice to a forged `From:` is spam sent in your name.
+
+### Moderation
+
+The moderation mail carries one link. It opens a page showing the message and why it is held
+(moderated list, unverified sender, an outsider on an announcement…); only the page's buttons
+accept or refuse it. Mail scanners open links, so opening one decides nothing. The link names the
+message and carries an HMAC token made with the database's `link_secret` (created on first use;
+replacing it voids every link already sent) — never the cron key. The **Moderation** page of the
+interface works as before.
+
 ### What subscribers receive
 
 Each list gets the **original message**, body byte for byte (inline images, attachments, encodings
@@ -218,7 +247,10 @@ A recipient the server refuses is logged (and blocked if unknown), never a reaso
 
 ### Unsubscribing
 
-Users can unsubscribe by sending an email to the list with **STOP** as the subject.
+Users can unsubscribe by sending an email to the list with **STOP** as the subject — on every list,
+moderated or not; the `List-Unsubscribe` header carries that address, so mail apps that show an
+unsubscribe button send it for them. A STOP the provider did not verify removes nobody: the admin
+is told and can do it from the interface.
 
 Example: Send to `mylist@yourdomain.com` with subject `STOP`
 
@@ -236,6 +268,7 @@ listes/
 ├── index.php           # Main entry point & router
 ├── config.php          # Configuration & helpers
 ├── cron.php            # Email processing endpoint
+├── moderate.php        # The page a moderation mail links to (view, then POST)
 ├── .htaccess           # Security rules
 ├── .gitignore          # Git ignore rules
 │

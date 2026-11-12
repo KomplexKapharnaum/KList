@@ -8,6 +8,7 @@
  * skips a list already `sent` when it tries the message again, and leaves out of a list's copy
  * anyone another list of the same message already tried — so nobody gets two copies, and a retry
  * never re-sends what went out (audit 2026-11-12, finding 2 and "no duplicates across lists").
+ * The intake reads it too: a reply to a message a list relayed is part of that list's thread.
  *
  * load()/save() are the only storage calls: the tests swap them for an array.
  */
@@ -39,6 +40,19 @@ class RelayJournal {
 
     public function isSent(string $key, string $liste): bool {
         return ($this->load($key)[$liste]['state'] ?? '') === 'sent';
+    }
+
+    /**
+     * Did this list relay one of these messages? The thread test of the intake (ListIntake): an
+     * outside participant may answer a message the list sent out, and only that.
+     */
+    public function relayedAny(array $keys, string $liste): bool {
+        foreach ($keys as $key) {
+            if ($this->isSent($key, $liste)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** Every address a `sent` list of this message already tried, taken or refused. */

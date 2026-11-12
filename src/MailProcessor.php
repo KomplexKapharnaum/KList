@@ -2,9 +2,10 @@
 /**
  * MailProcessor - Email processing for mailing lists
  * 
- * IMPORTANT: dispatch() preserves the exact logic from the original Listeproc.php
- * DO NOT modify the dispatch() or forward() logic without explicit user approval.
- * forward() relays the original message since 2026-11-12 (approved: "relay, don't rebuild").
+ * IMPORTANT: DO NOT modify the dispatch() or forward() logic without explicit user approval.
+ * forward() relays the original message since 2026-11-12 (approved: "relay, don't rebuild"), and
+ * dispatch() decides who may post with ListIntake since then too (approved with it: "intake +
+ * moderation"); blocklist, bounces and round-back are still the original Listeproc.php's.
  */
 
 declare(strict_types=1);
@@ -18,6 +19,7 @@ require_once $libPath . '/Fetch/MIME.php';
 require_once $libPath . '/Fetch/Attachment.php';
 require_once __DIR__ . '/ListRelay.php';
 require_once __DIR__ . '/RelayJournal.php';
+require_once __DIR__ . '/ListIntake.php';
 
 use Fetch\Server;
 use Fetch\Message;
@@ -45,6 +47,7 @@ class MailProcessor {
     private $imap;
     private $smtpConnection = null; // Reusable SMTP connection
     private array $blockedUnknown = []; // refused as unknown at RCPT TO this run, for the admin notice
+    private ?string $linkSecret = null; // signs the moderation links (ListIntake::token)
     
     private array $log = [];
     private array $stats = [
@@ -413,9 +416,9 @@ class MailProcessor {
      */
     private function notifyBlockedRecipients(): void {
         foreach ($this->blockedUnknown as $email) {
-            $mail = $this->mail('[Listes] adresse inconnue', $this->adminmail);
-            $mail->msgHTML("Bonjour,<br />l'adresse <strong>" . htmlspecialchars($email) . "</strong> a été désactivée,<br />internet ne la connait pas..");
-            $this->sendMailWithRetry($mail, 'unknown recipient notification');
+            $this->notify('[Listes] adresse inconnue', $this->adminmail,
+                "Bonjour,<br />l'adresse <strong>" . htmlspecialchars($email) . "</strong> a été désactivée,<br />internet ne la connait pas..",
+                'unknown recipient notification');
         }
         $this->blockedUnknown = [];
     }
@@ -657,6 +660,22 @@ class MailProcessor {
     }
 
     /**
+     * The PENDING message a moderation id names (ListIntake::moderationId of its Message-ID), or
+     * null. The content hash the links carried before 2026-11-12 still finds its message, so a
+     * moderation mail sent before the update keeps working from the admin pages.
+     */
+    private function findPending(string $id) {
+        $this->imap->setMailBox('PENDING');
+        foreach ($this->imap->getMessages() as $msg) {
+            if (hash_equals(ListIntake::moderationId(ListRelay::messageKey($msg->getRawMessage())), $id)
+                || hash_equals(sha1($msg->getRawHeaders() . $msg->getMessageBody()), $id)) {
+                return $msg;
+            }
+        }
+        return null;
+    }
+
+    /**
      * Approve a pending message
      */
     public function approve(string $uid): bool {
@@ -665,26 +684,21 @@ class MailProcessor {
             return false;
         }
         
-        $this->imap->setMailBox('PENDING');
-        $messages = $this->imap->getMessages();
-        
-        foreach ($messages as $msg) {
-            if ($uid == sha1($msg->getRawHeaders() . $msg->getMessageBody())) {
-                $this->moveToMailBox($msg, 'APPROVED');
-                $this->log('success', '✅ Message approved for distribution', ['uid' => substr($uid, 0, 8)]);
-                
-                // Process immediately
-                $this->process();
-                return true;
-            }
+        $msg = $this->findPending($uid);
+        if ($msg === null) {
+            $this->log('warning', '⚠️ Message not found in PENDING', ['uid' => substr($uid, 0, 8)]);
+            return false;
         }
-        
-        $this->log('warning', '⚠️ Message not found in PENDING', ['uid' => substr($uid, 0, 8)]);
-        return false;
+        $this->moveToMailBox($msg, 'APPROVED');
+        $this->log('success', '✅ Message approved for distribution', ['uid' => substr($uid, 0, 8)]);
+
+        // Process immediately
+        $this->process();
+        return true;
     }
 
     /**
-     * Discard a pending message
+     * Discard a pending message. The sender hears of it only if the provider verified them.
      */
     public function discard(string $uid): bool {
         if (!$this->ensureConnection()) {
@@ -692,45 +706,71 @@ class MailProcessor {
             return false;
         }
         
-        $this->imap->setMailBox('PENDING');
-        $messages = $this->imap->getMessages();
-        
-        foreach ($messages as $msg) {
-            if ($uid == sha1($msg->getRawHeaders() . $msg->getMessageBody())) {
-                $this->moveToMailBox($msg, 'DISCARDED');
-                $this->log('info', '🗑️ Message discarded by moderator', ['uid' => substr($uid, 0, 8)]);
-                
-                // Find the list to inform sender
-                try {
-                    foreach ($this->matchListes($msg) as $liste) {
-                        // INFORM SENDER
-                        $mail = $this->mail('[Listes] Envoi refusé par le modérateur', $msg->getAddresses('from')['address']);
-                        $mail->msgHTML("Bonjour,<br />vous avez envoyé un mail à la liste <strong>" . $liste['nom'] . "</strong>.
-                              <br />Le modérateur de la liste a refusé la transmission de votre mail.");
-                        $this->sendMailWithRetry($mail, 'discard notification');
-                        break;
-                    }
-                } catch (Exception $e) {
-                    $this->log('warning', '⚠️ Could not notify sender of discarded message: ' . $e->getMessage());
-                }
-                
-                return true;
-            }
+        $msg = $this->findPending($uid);
+        if ($msg === null) {
+            $this->log('warning', '⚠️ Message not found in PENDING', ['uid' => substr($uid, 0, 8)]);
+            return false;
         }
-        
-        $this->log('warning', '⚠️ Message not found in PENDING', ['uid' => substr($uid, 0, 8)]);
-        return false;
+        $this->moveToMailBox($msg, 'DISCARDED');
+        $this->log('info', '🗑️ Message discarded by moderator', ['uid' => substr($uid, 0, 8)]);
+
+        try {
+            $from = strtolower($msg->getAddresses('from')['address'] ?? '');
+            $listes = array_unique(array_column($this->matchListes($msg), 'nom'));
+            if ($listes && ListIntake::dmarcPass($msg->getRawMessage(), $this->authservId(), $from)) {
+                $this->notify('[Listes] Envoi refusé par le modérateur', $from,
+                    "Bonjour,<br />vous avez envoyé un mail à la liste <strong>" . htmlspecialchars(implode(', ', $listes)) . "</strong>.
+                      <br />Le modérateur de la liste a refusé la transmission de votre mail.",
+                    'discard notification');
+            }
+        } catch (Exception $e) {
+            $this->log('warning', '⚠️ Could not notify sender of discarded message: ' . $e->getMessage());
+        }
+        return true;
+    }
+
+    /** One PENDING message, for the moderation page; null when it is no longer there. */
+    public function getPendingMessage(string $id): ?array {
+        if (!$this->ensureConnection()) {
+            return null;
+        }
+        $msg = $this->findPending($id);
+        return $msg === null ? null : $this->pendingSummary($msg);
+    }
+
+    private function pendingSummary($msg): array {
+        $from = $msg->getAddresses('from');
+        $raw = $msg->getRawMessage();
+        return [
+            'uid' => ListIntake::moderationId(ListRelay::messageKey($raw)),
+            'from' => $from['address'] ?? 'unknown',
+            'from_name' => $from['name'] ?? '',
+            'verified' => ListIntake::dmarcPass($raw, $this->authservId(), strtolower($from['address'] ?? '')),
+            'subject' => $msg->getSubject(),
+            'date' => $msg->getDate(),
+            'body_preview' => self::cut(strip_tags((string) $msg->getMessageBody()), 2000),
+            'lists' => array_values(array_unique(array_column($this->matchListes($msg), 'nom'))),
+        ];
+    }
+
+    /** The first $chars characters of UTF-8 text (bytes, if it is not UTF-8). */
+    public static function cut(string $text, int $chars): string {
+        if (preg_match('/^.{0,' . $chars . '}/us', $text, $m)) {
+            return $m[0];
+        }
+        return substr($text, 0, $chars);
     }
 
     /**
      * DISPATCH - Handle incoming messages
-     * =====================================================
-     * PRESERVED FROM ORIGINAL - DO NOT MODIFY WITHOUT APPROVAL
-     * =====================================================
+     *
+     * Blocklist, bounces and our own copy coming back as in the original Listeproc.php. Who may
+     * post is ListIntake::decide() since 2026-11-12 (#t-073, approved with the relay: "intake +
+     * moderation"): a sender is trusted on the provider's DMARC stamp, never on From: alone; an
+     * outside participant may answer a thread the list relayed; automatic mail is filed silently;
+     * STOP works on every list; and no notice ever goes to a sender the stamp did not verify.
      */
     private function dispatch($msg): void {
-        $dispatch = null;
-        
         // Validate message structure
         try {
             $from = $msg->getAddresses('from');
@@ -750,143 +790,172 @@ class MailProcessor {
         
         // CHECK BLOCKLIST EARLY - before any processing
         if (isset($this->blocklist[$fromAddress])) {
-            $dispatch = 'DISCARDED';
             $this->stats['blocked']++;
             $this->log('warning', '🚫 Sender is blocked: ' . $fromAddress, ['email' => $fromAddress]);
-            $this->moveToMailBox($msg, $dispatch);
+            $this->moveToMailBox($msg, 'DISCARDED');
             return;
         }
 
-        // ERROR MAIL - Check for bounce messages
+        // ERROR MAIL - Check for bounce messages (before the automatic-mail filter: a bounce is one)
         $mailgex = "[_a-z0-9-]+(\.[_a-z0-9-]+)*@[a-z0-9-]+(\.[a-z0-9-]+)*(\.[a-z]{2,})";
         preg_match('/550 \d\.\d\.\d <(' . $mailgex . ')>/', $msg->getMessageBody(), $matches);
         
         if (count($matches) > 1 && $matches[1]) {
             // Block the bouncing email
             $this->blocklistManager->block($matches[1], 550);
-            $dispatch = 'ERRORS';
             $this->stats['blocked']++;
             $this->log('warning', '🚫 Blocked bouncing email: ' . $matches[1], ['email' => $matches[1], 'reason' => 'bounce']);
             
             // Notify admin
-            $mail = $this->mail('[Listes] adresse inconnue', $this->adminmail);
-            $mail->msgHTML("Bonjour,<br />l'adresse <strong>" . $matches[1] . "</strong> a été désactivée,<br />internet ne la connait pas..");
-            $this->sendMailWithRetry($mail, 'bounce notification');
+            $this->notify('[Listes] adresse inconnue', $this->adminmail,
+                "Bonjour,<br />l'adresse <strong>" . htmlspecialchars($matches[1]) . "</strong> a été désactivée,<br />internet ne la connait pas..",
+                'bounce notification');
+            $this->moveToMailBox($msg, 'ERRORS');
+            return;
         }
-        // FIND LIST IN DESTS
-        else {
-            $matchedListes = $this->matchListes($msg);
-            
-            // No matching list found
-            if (empty($matchedListes)) {
-                $dispatch = 'OTHERS';
-                $this->log('debug', '📋 No matching list found for message', [
-                    'from' => $fromAddress,
-                    'subject' => $msg->getSubject()
-                ]);
-            } else {
-                foreach ($matchedListes as $liste) {
-                    // ROUND BACK => archive
-                    if (stripos($msg->getRawHeaders(), 'X-list-relay: ' . $liste['email']) > 0) {
-                    $dispatch = 'ARCHIVE';
-                    break;
-                }
-                // AUTHORIZED SENDER (abonné à UNE liste n'importe laquelle)
-                else if (!in_array(strtolower($msg->getAddresses('from')['address']), $this->allAbonnes)) {
-                    if (!$dispatch) {
-                        $dispatch = 'DISCARDED';
-                        $this->stats['discarded']++;
-                        $this->log('warning', '⛔ Unauthorized sender to list: ' . $liste['nom'], [
-                            'from' => $msg->getAddresses('from')['address'],
-                            'list' => $liste['nom']
-                        ]);
-                    }
-                    
-                    // INFORM SENDER
-                    $mail = $this->mail('[Listes] envoi non autorisé', strtolower($msg->getAddresses('from')['address']));
-                    $mail->msgHTML("Bonjour,<br />vous avez envoyé un mail à la liste <strong>" . $liste['nom'] . "</strong>
-                              depuis l'adresse <strong>" . strtolower($msg->getAddresses('from')['address']) . "</strong>.
-                              <br />Cette adresse n'est pas autorisée à envoyer des mails sur cette liste.
-                              <br />Votre email ne pourra donc pas être transmis.");
-                    $this->sendMailWithRetry($mail, 'unauthorized notification');
-                }
-                // UNSUBSCRIBE
-                else if (trim($msg->getSubject()) == 'STOP') {
-                    $this->listManager->removeSubscriberFromList($liste['nom'], strtolower($msg->getAddresses('from')['address']));
-                    $dispatch = 'DONE';
-                    $this->log('success', '👋 Unsubscribed from list: ' . $liste['nom'], [
-                        'email' => $msg->getAddresses('from')['address'],
-                        'list' => $liste['nom']
-                    ]);
-                    
-                    // Notify admin
-                    $mail = $this->mail('[Desinscription] ' . $liste['nom'], $this->adminmail);
-                    $mail->msgHTML("Bonjour,<br />"
-                            . $msg->getAddresses('from')['address'] . ' s\'est désinscrit de la liste [' . $liste['nom'] . '].<br />');
-                    $this->sendMailWithRetry($mail, 'unsubscribe notification');
-                    break;
-                }
-                // LIST enabled check
-                else if (!$liste['active']) {
-                    if (!$dispatch) {
-                        $dispatch = 'DISCARDED';
-                        $this->stats['discarded']++;
-                        $this->log('warning', '⏸️ List is inactive: ' . $liste['nom'], ['list' => $liste['nom']]);
-                    }
-                    
-                    // INFORM SENDER
-                    $mail = $this->mail('[Listes] liste inactive', $msg->getAddresses('from')['address']);
-                    $mail->msgHTML("Bonjour,<br />vous avez envoyé un mail à la liste <strong>" . $liste['nom'] . "</strong>.
-                              <br />Cette liste est actuellement désactivée, votre email ne pourra donc pas être transmis.");
-                    $this->sendMailWithRetry($mail, 'inactive list notification');
-                }
-                // MODERATION required
-                else if ($liste['moderation']) {
-                    $dispatch = 'PENDING';
-                    $this->stats['pending']++;
-                    $uid = sha1($msg->getRawHeaders() . $msg->getMessageBody());
-                    $this->log('info', '⏳ Message pending moderation for list: ' . $liste['nom'], [
-                        'list' => $liste['nom'],
-                        'from' => $msg->getAddresses('from')['address'],
-                        'subject' => $msg->getSubject(),
-                        'uid' => substr($uid, 0, 8)
-                    ]);
-                    
-                    // Generate approve/discard URLs
-                    $baseUrl = $this->getBaseUrl();
-                    
-                    $mail = $this->mail('[Moderation] ' . $liste['nom'], $this->adminmail);
-                    $mail->msgHTML("Bonjour,<br />"
-                            . $msg->getAddresses('from')['address'] . ' a envoyé un message sur la liste [' . $liste['nom'] . '].<br />'
-                            . 'Vous devez modérer ce message pour en accepter ou refuser la diffusion.<br /><br />'
-                            . '<em><strong>Sujet: </strong></em>' . $msg->getSubject() . '<br /><br />'
-                            . '<em><strong>Message: </strong></em><br /><br />' . $msg->getMessageBody(true) . '<br /><br />'
-                            . '<a href="' . $baseUrl . 'cron.php?action=approve&uid=' . $uid . '&key=' . $this->db->getSetting('cron_key') . '">Accepter la diffusion</a>  /  '
-                            . '<a href="' . $baseUrl . 'cron.php?action=discard&uid=' . $uid . '&key=' . $this->db->getSetting('cron_key') . '">Refuser la diffusion</a><br />');
-                    $this->sendMailWithRetry($mail, 'moderation notification');
-                    break;
-                }
-                // APPROVED - ready to forward
-                else {
-                    $dispatch = 'APPROVED';
-                    $this->log('success', '✓ Message approved for list: ' . $liste['nom'], [
-                        'list' => $liste['nom'],
-                        'from' => $msg->getAddresses('from')['address'],
-                        'subject' => $msg->getSubject()
-                    ]);
-                }
-                } // end foreach matchedListes
-            } // end else (has matched listes)
-        } // end else (not error mail)
 
-        if (!$dispatch) {
-            $dispatch = 'OTHERS';
-            $this->log('debug', '📋 Message moved to OTHERS (no matching list)', [
-                'from' => $fromAddress ?? 'unknown',
-                'subject' => $msg->getSubject()
-            ]);
+        $matchedListes = $this->matchListes($msg);
+
+        // ROUND BACK => archive (our own copy of a list, come back)
+        foreach ($matchedListes as $liste) {
+            if (stripos($msg->getRawHeaders(), 'X-list-relay: ' . $liste['email']) !== false) {
+                $this->moveToMailBox($msg, 'ARCHIVE');
+                return;
+            }
         }
-        $this->moveToMailBox($msg, $dispatch);
+
+        $lists = [];
+        foreach ($matchedListes as $liste) {
+            $lists[$liste['nom']] = $liste;     // the same list named on two of its domains: once
+        }
+        $raw = $msg->getRawMessage();
+        $verified = ListIntake::dmarcPass($raw, $this->authservId(), $fromAddress);
+        $thread = ListIntake::threadIds($raw);
+        $v = ListIntake::decide(
+            $fromAddress,
+            $verified,
+            ListIntake::automatic($raw, $this->ownAddresses()),
+            ListIntake::isStop((string) $msg->getSubject()),
+            array_values($lists),
+            $this->allAbonnes,
+            fn(string $nom): bool => $thread !== [] && $this->journal->relayedAny($thread, $nom)
+        );
+        $context = [
+            'from' => $fromAddress,
+            'lists' => array_keys($lists),
+            'verified' => $verified,
+            'why' => $v['why'],
+            'subject' => $msg->getSubject(),
+        ];
+
+        // UNSUBSCRIBE - a verified STOP leaves every list named that has the sender
+        foreach ($v['unsubscribe'] as $nom) {
+            $this->listManager->removeSubscriberFromList($nom, $fromAddress);
+            $this->log('success', '👋 Unsubscribed from list: ' . $nom, ['email' => $fromAddress, 'list' => $nom]);
+            $this->notify('[Desinscription] ' . $nom, $this->adminmail,
+                "Bonjour,<br />" . htmlspecialchars($fromAddress) . " s'est désinscrit de la liste [" . htmlspecialchars($nom) . '].<br />',
+                'unsubscribe notification');
+        }
+        // A STOP the provider did not verify removes nobody: anyone can write that From:
+        foreach ($v['stopUnverified'] as $nom) {
+            $this->log('warning', '⚠️ STOP from an unverified sender, nobody removed: ' . $nom, ['email' => $fromAddress, 'list' => $nom]);
+            $this->notify('[Desinscription non vérifiée] ' . $nom, $this->adminmail,
+                "Bonjour,<br />un message STOP pour la liste [" . htmlspecialchars($nom) . "] dit venir de <strong>" . htmlspecialchars($fromAddress)
+                . "</strong>, mais son adresse n'a pas pu être vérifiée (DMARC) : personne n'a été désinscrit."
+                . "<br />Si c'est bien cette personne, désinscrivez-la depuis l'interface.",
+                'unverified unsubscribe notification');
+        }
+
+        switch ($v['folder']) {
+            case 'OTHERS':
+                $this->log('debug', '📋 Message moved to OTHERS (' . $v['why'] . ')', $context);
+                break;
+            case 'DISCARDED':
+                $this->stats['discarded']++;
+                $this->log('warning', '⛔ Message refused (' . $v['why'] . ')', $context);
+                break;
+            case 'PENDING':
+                $this->stats['pending']++;
+                $this->log('info', '⏳ Message pending moderation (' . $v['why'] . ')', $context);
+                $this->askModerator($msg, $raw, $fromAddress, array_keys($lists), $v['why']);
+                break;
+            case 'APPROVED':
+                $this->log('success', '✓ Message approved for list(s): ' . implode(', ', array_keys($lists)), $context);
+                break;
+        }
+
+        // INFORM SENDER - only a verified one: a notice to a forged From is spam we send
+        if ($v['notify'] === 'not-subscriber') {
+            $this->notify('[Listes] envoi non autorisé', $fromAddress,
+                "Bonjour,<br />vous avez envoyé un mail à la liste <strong>" . htmlspecialchars(implode(', ', array_keys($lists))) . "</strong>
+                      depuis l'adresse <strong>" . htmlspecialchars($fromAddress) . "</strong>.
+                      <br />Cette adresse n'est pas autorisée à envoyer des mails sur cette liste.
+                      <br />Votre email ne pourra donc pas être transmis.",
+                'unauthorized notification');
+        } elseif ($v['notify'] === 'inactive') {
+            $this->notify('[Listes] liste inactive', $fromAddress,
+                "Bonjour,<br />vous avez envoyé un mail à la liste <strong>" . htmlspecialchars(implode(', ', $v['inactive'])) . "</strong>.
+                      <br />Cette liste est actuellement désactivée, votre email ne pourra donc pas être transmis.",
+                'inactive list notification');
+        }
+
+        $this->moveToMailBox($msg, $v['folder']);
+    }
+
+    /** What the moderator reads for each reason ListIntake::decide() holds a message. */
+    public const PENDING_LABELS = [
+        'moderated'          => 'la liste est modérée',
+        'unverified'         => "l'adresse de l'expéditeur n'a pas pu être vérifiée (DMARC) : n'importe qui peut l'écrire",
+        'outside-broadcast'  => "une personne extérieure répond à une annonce de la liste",
+        'outside-other-list' => "une personne extérieure répond à un fil, mais écrit aussi à une liste qui n'en fait pas partie",
+    ];
+
+    /**
+     * The moderation mail: who, what, why it is held, and ONE link. The link opens a page; only
+     * the button on that page (a POST) acts, so a mail scanner that opens links decides nothing.
+     * The link carries an HMAC of the message's id, never the cron key.
+     */
+    private function askModerator($msg, string $raw, string $from, array $lists, string $why): void {
+        $link = $this->moderationLink(ListRelay::messageKey($raw));
+        $preview = self::cut(trim((string) $msg->getMessageBody()), 2000);
+        $this->notify('[Moderation] ' . implode(', ', $lists), $this->adminmail,
+            "Bonjour,<br />"
+            . htmlspecialchars($from) . ' a envoyé un message sur la liste [' . htmlspecialchars(implode(', ', $lists)) . '].<br />'
+            . 'Il attend votre décision : ' . htmlspecialchars(self::PENDING_LABELS[$why] ?? $why) . '.<br /><br />'
+            . '<em><strong>Sujet: </strong></em>' . htmlspecialchars((string) $msg->getSubject()) . '<br /><br />'
+            . '<em><strong>Message: </strong></em><br /><br />' . nl2br(htmlspecialchars($preview)) . '<br /><br />'
+            . '<a href="' . htmlspecialchars($link) . '">Ouvrir le message pour l\'accepter ou le refuser</a><br />',
+            'moderation notification');
+    }
+
+    /** The moderation page's address for one message: its id and a token only we can make. */
+    public function moderationLink(string $messageKey): string {
+        $id = ListIntake::moderationId($messageKey);
+        return $this->getBaseUrl() . 'moderate.php?id=' . $id . '&t=' . ListIntake::token($this->linkSecret(), 'moderate', $id);
+    }
+
+    public function checkModerationToken(string $id, string $token): bool {
+        return ListIntake::checkToken($this->linkSecret(), $token, 'moderate', $id);
+    }
+
+    /** Our own addresses: every list's, on every domain, and the mailbox. */
+    private function ownAddresses(): array {
+        return array_merge(array_keys($this->listes), [strtolower($this->username)]);
+    }
+
+    private function authservId(): string {
+        return $this->db->getSetting('authserv_id', ListIntake::AUTHSERV_ID) ?: ListIntake::AUTHSERV_ID;
+    }
+
+    private function linkSecret(): string {
+        return $this->linkSecret ??= ListIntake::secret($this->db);
+    }
+
+    /** A mail from the robot mailbox to one address (the admin, or a verified sender). */
+    protected function notify(string $subject, string $to, string $html, string $context): void {
+        $mail = $this->mail($subject, $to);
+        $mail->msgHTML($html);
+        $this->sendMailWithRetry($mail, $context);
     }
 
     /**
@@ -1169,16 +1238,9 @@ class MailProcessor {
                     $msg = $this->imap->getMessageByUid($uid);
                     if ($msg === false) continue;
                     
-                    $from = $msg->getAddresses('from');
-                    $messages[] = [
-                        'uid' => sha1($msg->getRawHeaders() . $msg->getMessageBody()),
-                        'from' => $from['address'] ?? 'unknown',
-                        'from_name' => $from['name'] ?? '',
-                        'subject' => $msg->getSubject(),
-                        'date' => $msg->getDate(),
-                        'body_preview' => substr(strip_tags($msg->getMessageBody()), 0, 200),
-                        'lists' => array_keys($this->matchListes($msg))
-                    ];
+                    $summary = $this->pendingSummary($msg);
+                    $summary['body_preview'] = self::cut($summary['body_preview'], 200);
+                    $messages[] = $summary;
                     
                     unset($msg);
                     gc_collect_cycles();
